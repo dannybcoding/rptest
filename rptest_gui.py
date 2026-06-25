@@ -418,7 +418,7 @@ class MainWindow(QMainWindow):
         gl.addWidget(QLabel("Time to run (-ttr, ms, -1=forever):"), 0, 0)
         self.ttr_spin = QSpinBox()
         self.ttr_spin.setRange(-1, 9999999)
-        self.ttr_spin.setValue(60000)
+        self.ttr_spin.setValue(60)
         self.ttr_spin.setSpecialValueText("Forever (-1)")
         self.ttr_spin.valueChanged.connect(self._refresh_command)
         gl.addWidget(self.ttr_spin, 0, 1)

@@ -1,28 +1,204 @@
-2026-06-25 11:37:08,211 - INFO - ============================================================
-2026-06-25 11:37:08,211 - INFO - DIGI REALPORT SERIAL STRESS TEST
-2026-06-25 11:37:08,211 - INFO - ============================================================
-2026-06-25 11:37:08,212 - INFO -   BX ports : [0, 1, 2, 3, 4, 5, 6, 7]  TX ports: []  RX ports: []
-2026-06-25 11:37:08,212 - INFO -   Baud: 9600  DataBits: 8  Parity: 0  StopBits: 0
-2026-06-25 11:37:08,212 - INFO -   RTS: 0  CTS: -1  XonXoff: 0
-2026-06-25 11:37:08,212 - INFO -   BufSize: 1152B  MaxBufs: -1  TTR: 60000ms
-2026-06-25 11:37:08,212 - INFO -   Reps: 1  SleepBetween: 0ms  Verify: True
-2026-06-25 11:37:08,212 - INFO - ============================================================
-2026-06-25 11:37:08,213 - INFO - 
+2026-06-25 12:59:24,433 - INFO - ============================================================
+2026-06-25 12:59:24,433 - INFO - DIGI REALPORT SERIAL STRESS TEST
+2026-06-25 12:59:24,434 - INFO - ============================================================
+2026-06-25 12:59:24,434 - INFO -   BX ports : [0, 1, 2, 3, 4, 5, 6, 7]  TX ports: []  RX ports: []
+2026-06-25 12:59:24,434 - INFO -   Baud: 230400  DataBits: 8  Parity: 0  StopBits: 0
+2026-06-25 12:59:24,434 - INFO -   RTS: 1  CTS: -1  XonXoff: 0
+2026-06-25 12:59:24,434 - INFO -   BufSize: 1152B  MaxBufs: -1  TTR: 10ms
+2026-06-25 12:59:24,434 - INFO -   Reps: 1  SleepBetween: 0ms  Verify: True
+2026-06-25 12:59:24,434 - INFO - ============================================================
+2026-06-25 12:59:24,435 - INFO - 
 >>> Iteration 1 of 1
-2026-06-25 11:37:08,213 - INFO - --- Iteration 1 start ---
-2026-06-25 11:37:08,261 - DEBUG - Opened TX port: /dev/ttyE800
-2026-06-25 11:37:08,302 - DEBUG - Opened TX port: /dev/ttyE801
-2026-06-25 11:37:08,341 - DEBUG - Opened TX port: /dev/ttyE802
-2026-06-25 11:37:08,382 - DEBUG - Opened TX port: /dev/ttyE803
-2026-06-25 11:37:08,441 - DEBUG - Opened TX port: /dev/ttyE804
-2026-06-25 11:37:08,481 - DEBUG - Opened TX port: /dev/ttyE805
-2026-06-25 11:37:08,523 - DEBUG - Opened TX port: /dev/ttyE806
-2026-06-25 11:37:08,582 - DEBUG - Opened TX port: /dev/ttyE807
-2026-06-25 11:37:08,631 - DEBUG - Opened RX port: /dev/ttyT800
-2026-06-25 11:37:08,671 - DEBUG - Opened RX port: /dev/ttyT801
-2026-06-25 11:37:08,710 - DEBUG - Opened RX port: /dev/ttyT802
-2026-06-25 11:37:08,788 - DEBUG - Opened RX port: /dev/ttyT803
-2026-06-25 11:37:08,865 - DEBUG - Opened RX port: /dev/ttyT804
-2026-06-25 11:37:08,943 - DEBUG - Opened RX port: /dev/ttyT805
-2026-06-25 11:37:09,021 - DEBUG - Opened RX port: /dev/ttyT806
-2026-06-25 11:37:09,061 - DEBUG - Opened RX port: /dev/ttyT807
+2026-06-25 12:59:24,435 - INFO - --- Iteration 1 start ---
+2026-06-25 12:59:24,503 - DEBUG - Opened TX port: /dev/ttyE800
+2026-06-25 12:59:24,543 - DEBUG - Opened TX port: /dev/ttyE801
+2026-06-25 12:59:24,583 - DEBUG - Opened TX port: /dev/ttyE802
+2026-06-25 12:59:24,623 - DEBUG - Opened TX port: /dev/ttyE803
+2026-06-25 12:59:24,664 - DEBUG - Opened TX port: /dev/ttyE804
+2026-06-25 12:59:24,705 - DEBUG - Opened TX port: /dev/ttyE805
+2026-06-25 12:59:24,743 - DEBUG - Opened TX port: /dev/ttyE806
+2026-06-25 12:59:24,784 - DEBUG - Opened TX port: /dev/ttyE807
+2026-06-25 12:59:24,851 - DEBUG - Opened RX port: /dev/ttyT800
+2026-06-25 12:59:24,909 - DEBUG - Opened RX port: /dev/ttyT801
+2026-06-25 12:59:24,949 - DEBUG - Opened RX port: /dev/ttyT802
+2026-06-25 12:59:24,987 - DEBUG - Opened RX port: /dev/ttyT803
+2026-06-25 12:59:25,026 - DEBUG - Opened RX port: /dev/ttyT804
+2026-06-25 12:59:25,065 - DEBUG - Opened RX port: /dev/ttyT805
+2026-06-25 12:59:25,105 - DEBUG - Opened RX port: /dev/ttyT806
+2026-06-25 12:59:25,144 - DEBUG - Opened RX port: /dev/ttyT807
+2026-06-25 12:59:26,727 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:26,728 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:26,730 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:26,730 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:26,730 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:26,730 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:26,731 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:26,733 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:27,729 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:27,730 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:27,731 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:27,732 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:27,733 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:27,733 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:27,733 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:27,736 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:28,731 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:28,732 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:28,732 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:28,733 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:28,734 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:28,734 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:28,735 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:28,741 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:29,733 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:29,734 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:29,734 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:29,734 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:29,735 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:29,736 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:29,736 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:29,750 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:30,735 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:30,736 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:30,736 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:30,736 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:30,737 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:30,737 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:30,738 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:30,756 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:31,737 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:31,739 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:31,740 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:31,741 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:31,741 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:31,742 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:31,739 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:31,757 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:32,743 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:32,746 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:32,746 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:32,748 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:32,749 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:32,749 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:32,749 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:32,760 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:33,748 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:33,749 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:33,750 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:33,754 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:33,755 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:33,755 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:33,755 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:33,762 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:34,757 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:34,757 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:34,757 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:34,758 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:34,758 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:34,758 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:34,758 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:34,763 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:35,758 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:35,761 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:35,762 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:35,762 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:35,762 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:35,762 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:35,762 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:35,765 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:36,762 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:36,767 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:36,767 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:36,767 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:36,767 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:36,768 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:36,768 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:36,768 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:37,764 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:37,770 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:37,771 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:37,771 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:37,772 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:37,772 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:37,773 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:37,773 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:38,765 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:38,775 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:38,777 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:38,777 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:38,778 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:38,778 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:38,778 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:38,777 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:39,769 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:39,777 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:39,780 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:39,781 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:39,781 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:39,781 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:39,781 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:39,781 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:40,771 - DEBUG - [RX /dev/ttyT803] idle (senders_done=True)
+2026-06-25 12:59:40,778 - DEBUG - [RX /dev/ttyT804] idle (senders_done=True)
+2026-06-25 12:59:40,782 - DEBUG - [RX /dev/ttyT805] idle (senders_done=True)
+2026-06-25 12:59:40,783 - DEBUG - [RX /dev/ttyT806] idle (senders_done=True)
+2026-06-25 12:59:40,783 - DEBUG - [RX /dev/ttyT801] idle (senders_done=True)
+2026-06-25 12:59:40,783 - DEBUG - [RX /dev/ttyT800] idle (senders_done=True)
+2026-06-25 12:59:40,783 - DEBUG - [RX /dev/ttyT807] idle (senders_done=True)
+2026-06-25 12:59:40,783 - DEBUG - [RX /dev/ttyT802] idle (senders_done=True)
+2026-06-25 12:59:41,789 - INFO - ============================================================
+2026-06-25 12:59:41,789 - INFO - ITERATION 1 RESULTS
+2026-06-25 12:59:41,791 - INFO - ============================================================
+2026-06-25 12:59:41,793 - INFO -   /dev/ttyE800 -> /dev/ttyT800
+2026-06-25 12:59:41,795 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,795 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,796 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,798 - INFO -   /dev/ttyE801 -> /dev/ttyT801
+2026-06-25 12:59:41,798 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,799 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,800 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,800 - INFO -   /dev/ttyE802 -> /dev/ttyT802
+2026-06-25 12:59:41,801 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,801 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,802 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,804 - INFO -   /dev/ttyE803 -> /dev/ttyT803
+2026-06-25 12:59:41,804 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,804 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,805 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,805 - INFO -   /dev/ttyE804 -> /dev/ttyT804
+2026-06-25 12:59:41,806 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,807 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,807 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,807 - INFO -   /dev/ttyE805 -> /dev/ttyT805
+2026-06-25 12:59:41,808 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,808 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,810 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,810 - INFO -   /dev/ttyE806 -> /dev/ttyT806
+2026-06-25 12:59:41,811 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,811 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,811 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,812 - INFO -   /dev/ttyE807 -> /dev/ttyT807
+2026-06-25 12:59:41,813 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,813 - INFO -     Received:       1152 bytes  (    1152 B/s)
+2026-06-25 12:59:41,814 - INFO -     Dropped:           0 bytes
+2026-06-25 12:59:41,814 - INFO -   TOTALS  sent=9216  received=9216  dropped=0
+2026-06-25 12:59:41,814 - INFO - ============================================================
+2026-06-25 12:59:41,814 - INFO - ============================================================
+2026-06-25 12:59:41,815 - INFO - DATA VERIFICATION
+2026-06-25 12:59:41,820 - INFO - ============================================================
+2026-06-25 12:59:41,820 - INFO -   PASS  /dev/ttyE800 -> /dev/ttyT800  (1152 bytes match)
+2026-06-25 12:59:41,820 - INFO -   PASS  /dev/ttyE801 -> /dev/ttyT801  (1152 bytes match)
+2026-06-25 12:59:41,821 - INFO -   PASS  /dev/ttyE802 -> /dev/ttyT802  (1152 bytes match)
+2026-06-25 12:59:41,821 - INFO -   PASS  /dev/ttyE803 -> /dev/ttyT803  (1152 bytes match)
+2026-06-25 12:59:41,821 - INFO -   PASS  /dev/ttyE804 -> /dev/ttyT804  (1152 bytes match)
+2026-06-25 12:59:41,825 - INFO -   PASS  /dev/ttyE805 -> /dev/ttyT805  (1152 bytes match)
+2026-06-25 12:59:41,825 - INFO -   PASS  /dev/ttyE806 -> /dev/ttyT806  (1152 bytes match)
+2026-06-25 12:59:41,825 - INFO -   PASS  /dev/ttyE807 -> /dev/ttyT807  (1152 bytes match)
+2026-06-25 12:59:41,826 - INFO - ============================================================
+2026-06-25 12:59:41,826 - INFO - Iteration 1: PASS  (1 pass / 0 fail)
+2026-06-25 12:59:41,826 - INFO - Completed 1 iteration(s).
+2026-06-25 12:59:41,826 - INFO - ============================================================
+2026-06-25 12:59:41,826 - INFO - TEST COMPLETE
+2026-06-25 12:59:41,827 - INFO -   Iterations: 1  Passed: 1  Failed: 0
+2026-06-25 12:59:41,827 - INFO -   Result: PASS
+2026-06-25 12:59:41,827 - INFO - ============================================================

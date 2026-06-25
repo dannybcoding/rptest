@@ -158,9 +158,16 @@ def send_data(dut_port, cfg, sent_count, sent_data, pattern):
         logging.error(f"[TX {port_name}] Error: {e}")
         stop_event.set()
     finally:
+        # ALWAYS drain the TX buffer before closing. write() only queues bytes;
+        # closing without flushing can discard whatever is still in the OS /
+        # RealPort write buffer, silently dropping the tail of the transfer.
+        try:
+            dut_port.flush()          # blocks until all written data is transmitted
+        except Exception:
+            pass
         if cfg['flb']:
             try:
-                dut_port.flush()
+                dut_port.reset_output_buffer()
             except Exception:
                 pass
         try:
@@ -169,38 +176,55 @@ def send_data(dut_port, cfg, sent_count, sent_data, pattern):
             pass
 
 
-def receive_data(aux_port, cfg, received_count, received_data):
-    port_name = aux_port.port
-    ttr_sec   = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
-    rtc_sec   = cfg['rtc'] / 1000.0
-    drain_extra = 5.0
+def receive_data(aux_port, cfg, received_count, received_data, senders_done):
+    """
+    Drain the RX port until the senders are finished AND no new data has
+    arrived for `quiet_grace` seconds. Do NOT stop merely because the clock
+    passed `ttr`: on network-attached serial (RealPort) the tail of a transfer
+    arrives in bursts with small gaps, so a clock-based cutoff truncates data.
+    """
+    port_name   = aux_port.port
+    ttr_sec     = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
+    rtc_sec     = cfg['rtc'] / 1000.0
+    quiet_grace = max(rtc_sec, 2.0)          # how long to wait after the last byte
+    # Absolute safety cap so a stuck link can't drain forever.
+    hard_cap    = (ttr_sec + 60) if ttr_sec is not None else None
 
     try:
         time.sleep(0.5)
-        start_time = time.time()
+        start_time     = time.time()
+        last_data_time = start_time
 
         while not stop_event.is_set():
-            elapsed = time.time() - start_time
-            if ttr_sec is not None and elapsed >= (ttr_sec + drain_extra):
+            now = time.time()
+            if hard_cap is not None and (now - start_time) > hard_cap:
+                logging.warning(f"[RX {port_name}] hard cap reached, "
+                                f"stopping drain (possible stuck link)")
                 break
 
-            aux_port.timeout = min(rtc_sec, 2.0)
-            chunk = aux_port.read(aux_port.in_waiting or 1)
+            aux_port.timeout = min(rtc_sec, 1.0)
+            n = aux_port.in_waiting
+            chunk = aux_port.read(n if n > 0 else 1)
 
-            if not chunk:
-                if ttr_sec is not None and elapsed >= ttr_sec:
-                    break
-                logging.debug(f"[RX {port_name}] timeout at {elapsed:.1f}s")
+            if chunk:
+                received_count[port_name] += len(chunk)
+                if cfg['ver']:
+                    received_data[port_name].extend(chunk)
+                last_data_time = time.time()
+
+                if cfg['verbose']:
+                    elapsed = last_data_time - start_time
+                    tput = received_count[port_name] / elapsed if elapsed > 0 else 0
+                    logging.debug(f"[RX {port_name}] +{len(chunk)}B "
+                                  f"total={received_count[port_name]}B tput={tput:.0f}B/s")
                 continue
 
-            received_count[port_name] += len(chunk)
-            if cfg['ver']:
-                received_data[port_name].extend(chunk)
-
-            if cfg['verbose']:
-                tput = received_count[port_name] / elapsed if elapsed > 0 else 0
-                logging.debug(f"[RX {port_name}] +{len(chunk)}B "
-                              f"total={received_count[port_name]}B tput={tput:.0f}B/s")
+            # No data this round. Only quit once the senders are done sending
+            # AND the line has been quiet for quiet_grace seconds.
+            if senders_done.is_set() and (time.time() - last_data_time) >= quiet_grace:
+                break
+            logging.debug(f"[RX {port_name}] idle "
+                          f"(senders_done={senders_done.is_set()})")
 
     except Exception as e:
         logging.error(f"[RX {port_name}] Error: {e}")
@@ -286,11 +310,14 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
         port_mapping[dut] = aux
 
     threads        = []
+    tx_threads     = []
+    rx_threads     = []
     sent_count     = {}
     received_count = {}
     sent_data      = {}
     received_data  = {}
     open_ports     = []
+    senders_done   = threading.Event()
 
     logging.info(f"--- Iteration {iteration_num} start ---")
 
@@ -306,6 +333,7 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
                     args=(port, cfg, sent_count, sent_data, pattern),
                     name=f"TX-{dut_name}", daemon=True)
                 threads.append(t)
+                tx_threads.append(t)
                 logging.debug(f"Opened TX port: {dut_name}")
             except Exception as e:
                 logging.error(f"Cannot open TX port {dut_name}: {e}")
@@ -320,9 +348,10 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
                 received_data[aux_name]  = []
                 t = threading.Thread(
                     target=receive_data,
-                    args=(port, cfg, received_count, received_data),
+                    args=(port, cfg, received_count, received_data, senders_done),
                     name=f"RX-{aux_name}", daemon=True)
                 threads.append(t)
+                rx_threads.append(t)
                 logging.debug(f"Opened RX port: {aux_name}")
             except Exception as e:
                 logging.error(f"Cannot open RX port {aux_name}: {e}")
@@ -333,12 +362,29 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
             t.start()
 
         ttr_sec = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
-        if ttr_sec:
-            time.sleep(ttr_sec + 7)
+
+        # 1) Wait for the senders to finish. They self-terminate at ttr / nob.
+        if ttr_sec is not None:
+            send_wait = ttr_sec + 15
         else:
+            # Continuous run: senders only stop when stop_event is set externally.
             while not stop_event.is_set():
                 time.sleep(1)
+            send_wait = 15
+        for t in tx_threads:
+            t.join(timeout=send_wait)
 
+        # 2) Tell the receivers the senders are done. They keep draining until
+        #    the line has been quiet for quiet_grace, so the in-flight tail of
+        #    each transfer is fully captured before we tear down.
+        senders_done.set()
+
+        # 3) Let the receivers drain and exit on their own.
+        rx_wait = (ttr_sec + 75) if ttr_sec is not None else 75
+        for t in rx_threads:
+            t.join(timeout=rx_wait)
+
+        # 4) Now everything is done (or timed out) — signal global stop.
         stop_event.set()
         for t in threads:
             t.join(timeout=10)
