@@ -287,13 +287,6 @@ class MainWindow(QMainWindow):
         self.rxp_edit.textChanged.connect(self._refresh_command)
         gl.addWidget(self.rxp_edit, 2, 1)
 
-        #note = QLabel("Port indices map to:\n"
-        #              "  DUT → /dev/tty<ID><nn>\n"
-        #              "  AUX → /dev/tty<ID><nn>")
-        #note.setStyleSheet("color: #888898; font-size: 11px;")
-        #gl.addWidget(note, 3, 0, 1, 2)
-        #lay.addWidget(grp)
-
         gl.addWidget(QLabel("DUT device ID (-dut):"), 3, 0)
         self.dut_edit = QLineEdit("e8")
         self.dut_edit.setPlaceholderText("e.g. e8")
@@ -306,9 +299,12 @@ class MainWindow(QMainWindow):
         self.aux_edit.textChanged.connect(self._refresh_command)
         gl.addWidget(self.aux_edit, 4, 1)
 
-        note = QLabel("Ports map to: /dev/tty<ID><nn>")
+        note = QLabel("Ports map to: /dev/tty<ID><nn>\n"
+                      "  e.g. DUT=e8, port 0 → /dev/ttye800\n"
+                      "  e.g. AUX=TS, port 0 → /dev/ttyTS00")
         note.setStyleSheet("color: #888898; font-size: 11px;")
         gl.addWidget(note, 5, 0, 1, 2)
+        lay.addWidget(grp)  # ← this line was accidentally commented out on GitHub
 
         # Iteration group
         grp2 = QGroupBox("Iterations")

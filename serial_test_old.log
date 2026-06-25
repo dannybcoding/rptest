@@ -1,0 +1,28 @@
+2026-06-25 11:37:08,211 - INFO - ============================================================
+2026-06-25 11:37:08,211 - INFO - DIGI REALPORT SERIAL STRESS TEST
+2026-06-25 11:37:08,211 - INFO - ============================================================
+2026-06-25 11:37:08,212 - INFO -   BX ports : [0, 1, 2, 3, 4, 5, 6, 7]  TX ports: []  RX ports: []
+2026-06-25 11:37:08,212 - INFO -   Baud: 9600  DataBits: 8  Parity: 0  StopBits: 0
+2026-06-25 11:37:08,212 - INFO -   RTS: 0  CTS: -1  XonXoff: 0
+2026-06-25 11:37:08,212 - INFO -   BufSize: 1152B  MaxBufs: -1  TTR: 60000ms
+2026-06-25 11:37:08,212 - INFO -   Reps: 1  SleepBetween: 0ms  Verify: True
+2026-06-25 11:37:08,212 - INFO - ============================================================
+2026-06-25 11:37:08,213 - INFO - 
+>>> Iteration 1 of 1
+2026-06-25 11:37:08,213 - INFO - --- Iteration 1 start ---
+2026-06-25 11:37:08,261 - DEBUG - Opened TX port: /dev/ttyE800
+2026-06-25 11:37:08,302 - DEBUG - Opened TX port: /dev/ttyE801
+2026-06-25 11:37:08,341 - DEBUG - Opened TX port: /dev/ttyE802
+2026-06-25 11:37:08,382 - DEBUG - Opened TX port: /dev/ttyE803
+2026-06-25 11:37:08,441 - DEBUG - Opened TX port: /dev/ttyE804
+2026-06-25 11:37:08,481 - DEBUG - Opened TX port: /dev/ttyE805
+2026-06-25 11:37:08,523 - DEBUG - Opened TX port: /dev/ttyE806
+2026-06-25 11:37:08,582 - DEBUG - Opened TX port: /dev/ttyE807
+2026-06-25 11:37:08,631 - DEBUG - Opened RX port: /dev/ttyT800
+2026-06-25 11:37:08,671 - DEBUG - Opened RX port: /dev/ttyT801
+2026-06-25 11:37:08,710 - DEBUG - Opened RX port: /dev/ttyT802
+2026-06-25 11:37:08,788 - DEBUG - Opened RX port: /dev/ttyT803
+2026-06-25 11:37:08,865 - DEBUG - Opened RX port: /dev/ttyT804
+2026-06-25 11:37:08,943 - DEBUG - Opened RX port: /dev/ttyT805
+2026-06-25 11:37:09,021 - DEBUG - Opened RX port: /dev/ttyT806
+2026-06-25 11:37:09,061 - DEBUG - Opened RX port: /dev/ttyT807

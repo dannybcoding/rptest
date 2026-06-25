@@ -1,0 +1,85 @@
+2026-06-25 11:38:23,656 - INFO - ============================================================
+2026-06-25 11:38:23,657 - INFO - DIGI REALPORT SERIAL STRESS TEST
+2026-06-25 11:38:23,657 - INFO - ============================================================
+2026-06-25 11:38:23,657 - INFO -   BX ports : [0, 1, 2, 3, 4, 5, 6, 7]  TX ports: []  RX ports: []
+2026-06-25 11:38:23,657 - INFO -   Baud: 9600  DataBits: 8  Parity: 0  StopBits: 0
+2026-06-25 11:38:23,657 - INFO -   RTS: 0  CTS: -1  XonXoff: 0
+2026-06-25 11:38:23,658 - INFO -   BufSize: 1152B  MaxBufs: -1  TTR: 15ms
+2026-06-25 11:38:23,658 - INFO -   Reps: 1  SleepBetween: 0ms  Verify: True
+2026-06-25 11:38:23,658 - INFO - ============================================================
+2026-06-25 11:38:23,659 - INFO - 
+>>> Iteration 1 of 1
+2026-06-25 11:38:23,659 - INFO - --- Iteration 1 start ---
+2026-06-25 11:38:23,737 - DEBUG - Opened TX port: /dev/ttyE800
+2026-06-25 11:38:23,796 - DEBUG - Opened TX port: /dev/ttyE801
+2026-06-25 11:38:23,837 - DEBUG - Opened TX port: /dev/ttyE802
+2026-06-25 11:38:23,897 - DEBUG - Opened TX port: /dev/ttyE803
+2026-06-25 11:38:23,957 - DEBUG - Opened TX port: /dev/ttyE804
+2026-06-25 11:38:23,997 - DEBUG - Opened TX port: /dev/ttyE805
+2026-06-25 11:38:24,037 - DEBUG - Opened TX port: /dev/ttyE806
+2026-06-25 11:38:24,077 - DEBUG - Opened TX port: /dev/ttyE807
+2026-06-25 11:38:24,178 - DEBUG - Opened RX port: /dev/ttyT800
+2026-06-25 11:38:24,216 - DEBUG - Opened RX port: /dev/ttyT801
+2026-06-25 11:38:24,255 - DEBUG - Opened RX port: /dev/ttyT802
+2026-06-25 11:38:24,313 - DEBUG - Opened RX port: /dev/ttyT803
+2026-06-25 11:38:24,352 - DEBUG - Opened RX port: /dev/ttyT804
+2026-06-25 11:38:24,391 - DEBUG - Opened RX port: /dev/ttyT805
+2026-06-25 11:38:24,430 - DEBUG - Opened RX port: /dev/ttyT806
+2026-06-25 11:38:24,489 - DEBUG - Opened RX port: /dev/ttyT807
+2026-06-25 11:38:31,589 - INFO - ============================================================
+2026-06-25 11:38:31,589 - INFO - ITERATION 1 RESULTS
+2026-06-25 11:38:31,590 - INFO - ============================================================
+2026-06-25 11:38:31,590 - INFO -   /dev/ttyE800 -> /dev/ttyT800
+2026-06-25 11:38:31,590 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,591 - INFO -     Received:        944 bytes  (     944 B/s)
+2026-06-25 11:38:31,591 - INFO -     Dropped:         208 bytes
+2026-06-25 11:38:31,591 - INFO -   /dev/ttyE801 -> /dev/ttyT801
+2026-06-25 11:38:31,592 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,592 - INFO -     Received:        944 bytes  (     944 B/s)
+2026-06-25 11:38:31,592 - INFO -     Dropped:         208 bytes
+2026-06-25 11:38:31,593 - INFO -   /dev/ttyE802 -> /dev/ttyT802
+2026-06-25 11:38:31,593 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,593 - INFO -     Received:        944 bytes  (     944 B/s)
+2026-06-25 11:38:31,594 - INFO -     Dropped:         208 bytes
+2026-06-25 11:38:31,594 - INFO -   /dev/ttyE803 -> /dev/ttyT803
+2026-06-25 11:38:31,594 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,595 - INFO -     Received:        944 bytes  (     944 B/s)
+2026-06-25 11:38:31,595 - INFO -     Dropped:         208 bytes
+2026-06-25 11:38:31,595 - INFO -   /dev/ttyE804 -> /dev/ttyT804
+2026-06-25 11:38:31,596 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,596 - INFO -     Received:        944 bytes  (     944 B/s)
+2026-06-25 11:38:31,596 - INFO -     Dropped:         208 bytes
+2026-06-25 11:38:31,597 - INFO -   /dev/ttyE805 -> /dev/ttyT805
+2026-06-25 11:38:31,597 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,597 - INFO -     Received:        976 bytes  (     976 B/s)
+2026-06-25 11:38:31,598 - INFO -     Dropped:         176 bytes
+2026-06-25 11:38:31,598 - INFO -   /dev/ttyE806 -> /dev/ttyT806
+2026-06-25 11:38:31,598 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,598 - INFO -     Received:        976 bytes  (     976 B/s)
+2026-06-25 11:38:31,599 - INFO -     Dropped:         176 bytes
+2026-06-25 11:38:31,599 - INFO -   /dev/ttyE807 -> /dev/ttyT807
+2026-06-25 11:38:31,599 - INFO -     Sent:           1152 bytes  (    1152 B/s)
+2026-06-25 11:38:31,600 - INFO -     Received:        976 bytes  (     976 B/s)
+2026-06-25 11:38:31,600 - INFO -     Dropped:         176 bytes
+2026-06-25 11:38:31,600 - INFO -   TOTALS  sent=9216  received=7648  dropped=1568
+2026-06-25 11:38:31,600 - INFO - ============================================================
+2026-06-25 11:38:31,601 - INFO - ============================================================
+2026-06-25 11:38:31,601 - INFO - DATA VERIFICATION
+2026-06-25 11:38:31,601 - INFO - ============================================================
+2026-06-25 11:38:31,602 - INFO -   FAIL  /dev/ttyE800 -> /dev/ttyT800  sent=1152B received=944B first mismatch @ byte 944
+2026-06-25 11:38:31,603 - INFO -   FAIL  /dev/ttyE801 -> /dev/ttyT801  sent=1152B received=944B first mismatch @ byte 944
+2026-06-25 11:38:31,604 - INFO -   FAIL  /dev/ttyE802 -> /dev/ttyT802  sent=1152B received=944B first mismatch @ byte 944
+2026-06-25 11:38:31,605 - INFO -   FAIL  /dev/ttyE803 -> /dev/ttyT803  sent=1152B received=944B first mismatch @ byte 944
+2026-06-25 11:38:31,607 - INFO -   FAIL  /dev/ttyE804 -> /dev/ttyT804  sent=1152B received=944B first mismatch @ byte 944
+2026-06-25 11:38:31,610 - INFO -   FAIL  /dev/ttyE805 -> /dev/ttyT805  sent=1152B received=976B first mismatch @ byte 976
+2026-06-25 11:38:31,611 - INFO -   FAIL  /dev/ttyE806 -> /dev/ttyT806  sent=1152B received=976B first mismatch @ byte 976
+2026-06-25 11:38:31,614 - INFO -   FAIL  /dev/ttyE807 -> /dev/ttyT807  sent=1152B received=976B first mismatch @ byte 976
+2026-06-25 11:38:31,614 - INFO - ============================================================
+2026-06-25 11:38:31,615 - ERROR - Dropped bytes detected.
+2026-06-25 11:38:31,618 - ERROR - Iteration 1: FAIL  (0 pass / 1 fail)
+2026-06-25 11:38:31,621 - ERROR - Stopping due to failure.
+2026-06-25 11:38:31,621 - INFO - ============================================================
+2026-06-25 11:38:31,622 - INFO - TEST COMPLETE
+2026-06-25 11:38:31,622 - INFO -   Iterations: 1  Passed: 0  Failed: 1
+2026-06-25 11:38:31,622 - INFO -   Result: FAIL
+2026-06-25 11:38:31,623 - INFO - ============================================================
