@@ -356,11 +356,15 @@ class FrameVerifier:
 # I/O worker threads
 # ---------------------------------------------------------------------------
 
-def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, pattern):
+def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, errors, local_stop, pattern):
     # `port` may be shared with a receive_data thread (bidirectional -bxp).
     # This thread must NOT close the handle — closing would yank it out from
     # under its receive thread mid-drain. run_iteration closes centrally once
     # every thread has stopped.
+    #
+    # `local_stop` stops only THIS thread; `stop_event` is the run-wide stop.
+    # On an error we set local_stop (not the global), so one bad port no longer
+    # tears down every other port's transfer mid-flight.
     port_name   = port.port
     payload_len = cfg['payload_len']
     btw_sec     = cfg['btw'] / 1000.0
@@ -374,7 +378,7 @@ def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, pattern):
         start_time   = time.time()   # the real send window starts after warmup
         buffers_sent = 0
 
-        while not stop_event.is_set():
+        while not (stop_event.is_set() or local_stop.is_set()):
             if ttr_sec is not None and (time.time() - start_time) >= ttr_sec:
                 break
             if nob >= 0 and buffers_sent >= nob:
@@ -404,7 +408,8 @@ def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, pattern):
 
     except Exception as e:
         logging.error(f"[TX {port_name}] Error: {e}")
-        stop_event.set()
+        errors[f"TX {port_name}"] = str(e)
+        local_stop.set()          # isolate: stop only this port, not the iteration
     finally:
         # Wall-clock the port was actively writing (measured before flush, which
         # is buffer-drain time, not active sending). Used for the real B/s figure.
@@ -422,7 +427,7 @@ def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, pattern):
                 pass
 
 
-def receive_data(port, cfg, received_count, verifiers, recv_elapsed, senders_done):
+def receive_data(port, cfg, received_count, verifiers, recv_elapsed, errors, local_stop, senders_done):
     """
     Drain the RX port until the senders are finished AND no new data has
     arrived for `quiet_grace` seconds. Do NOT stop merely because the clock
@@ -447,7 +452,7 @@ def receive_data(port, cfg, received_count, verifiers, recv_elapsed, senders_don
         start_time     = time.time()
         last_data_time = start_time
 
-        while not stop_event.is_set():
+        while not (stop_event.is_set() or local_stop.is_set()):
             now = time.time()
             if hard_cap is not None and (now - start_time) > hard_cap:
                 logging.warning(f"[RX {port_name}] hard cap reached, "
@@ -483,7 +488,8 @@ def receive_data(port, cfg, received_count, verifiers, recv_elapsed, senders_don
 
     except Exception as e:
         logging.error(f"[RX {port_name}] Error: {e}")
-        stop_event.set()
+        errors[f"RX {port_name}"] = str(e)
+        local_stop.set()          # isolate: stop only this port, not the iteration
     finally:
         # Wall-clock from the first byte to the last byte actually received — the
         # window data was flowing, which is the meaningful divisor for RX B/s.
@@ -649,35 +655,57 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
     recv_elapsed   = {}   # name -> seconds from first to last byte received
     verifiers      = {}   # name -> FrameVerifier (streaming, flat memory)
     port_objs      = {}   # name -> Serial (opened once, may host TX and RX)
+    errors         = {}   # "TX/RX/OPEN <port>" -> error string (per-port isolation)
     senders_done   = threading.Event()
 
     logging.info(f"--- Iteration {iteration_num} start ---")
     emit_event({"type": "iteration_start", "iteration": iteration_num})
 
     try:
-        # Open every participating port exactly once.
+        # Open each port. A port that won't open is recorded and skipped — it no
+        # longer aborts the whole iteration, so the other ports still get tested.
         for name in all_ports:
             try:
                 port_objs[name] = open_port(name, cfg)
                 logging.debug(f"Opened port: {name}")
             except Exception as e:
                 logging.error(f"Cannot open port {name}: {e}")
-                stop_event.set()
-                for p in port_objs.values():
-                    try:
-                        p.close()
-                    except Exception:
-                        pass
-                return False
+                errors[f"OPEN {name}"] = str(e)
+
+        bad = [n for n in all_ports if n not in port_objs]
+        if bad:
+            logging.warning(f"Skipping {len(bad)} port(s) that failed to open: "
+                            f"{bad}; continuing with the rest.")
+            for name in bad:
+                emit_event({"type": "port_error", "iteration": iteration_num,
+                            "port": name, "stage": "open", "error": errors[f"OPEN {name}"]})
+            # Drop un-opened ports (and any pairs that touch them) from the run.
+            send_ports   = [n for n in send_ports if n in port_objs]
+            recv_ports   = [n for n in recv_ports if n in port_objs]
+            verify_pairs = [(s, r) for (s, r) in verify_pairs
+                            if s in port_objs and r in port_objs]
+            all_ports    = [n for n in all_ports if n in port_objs]
+
+        if not port_objs:
+            logging.error("No ports opened; nothing to test this iteration.")
+            return False
+
+        # Per-thread stop events: a worker stops ITSELF on error (see send/recv),
+        # leaving the others running. The global stop_event is reserved for a
+        # run-wide stop (SIGTERM / end of iteration).
+        tx_stops = {}
+        rx_stops = {}
 
         # One send thread per sending port.
         for name in send_ports:
             sent_count[name]   = 0
             sent_frames[name]  = 0
             sent_elapsed[name] = 0.0
+            tx_stops[name]     = threading.Event()
             t = threading.Thread(
                 target=send_data,
-                args=(port_objs[name], cfg, sent_count, sent_frames, sent_elapsed, pattern),
+                args=(port_objs[name], cfg, sent_count, sent_frames, sent_elapsed,
+                      errors, tx_stops[name], pattern),
                 name=f"TX-{name}", daemon=True)
             threads.append(t); tx_threads.append(t)
 
@@ -686,9 +714,11 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
             received_count[name] = 0
             recv_elapsed[name]   = 0.0
             verifiers[name]      = FrameVerifier()
+            rx_stops[name]       = threading.Event()
             t = threading.Thread(
                 target=receive_data,
-                args=(port_objs[name], cfg, received_count, verifiers, recv_elapsed, senders_done),
+                args=(port_objs[name], cfg, received_count, verifiers, recv_elapsed,
+                      errors, rx_stops[name], senders_done),
                 name=f"RX-{name}", daemon=True)
             threads.append(t); rx_threads.append(t)
 
@@ -701,8 +731,11 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         if ttr_sec is not None:
             send_wait = ttr_sec + 15
         else:
-            # Continuous run: senders only stop when stop_event is set externally.
+            # Continuous run: keep going until a run-wide stop OR until every
+            # sender has stopped (e.g. all errored out — don't wait forever).
             while not stop_event.is_set():
+                if not any(t.is_alive() for t in tx_threads):
+                    break
                 time.sleep(1)
             send_wait = 15
         for t in tx_threads:
@@ -786,6 +819,26 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         # byte-count surplus is the signal that catches it.
         if any(v > 0 for v in extra.values()):
             logging.error("Extra bytes detected (received more than sent).")
+            passed = False
+
+        # Per-port outcome: which ports errored (open/TX/RX) vs survived. One bad
+        # port no longer truncates the others, so this breakdown is meaningful.
+        if errors:
+            failed_ports = sorted({lbl.split(' ', 1)[1] for lbl in errors})
+            survived     = [n for n in all_ports if n not in failed_ports]
+            logging.info("=" * 60)
+            logging.info("PORT STATUS")
+            for lbl in sorted(errors):
+                logging.error(f"  ERRORED {lbl}: {errors[lbl]}")
+                stage = lbl.split(' ', 1)[0]
+                if stage != 'OPEN':           # open errors already emitted above
+                    emit_event({"type": "port_error", "iteration": iteration_num,
+                                "port": lbl.split(' ', 1)[1], "stage": stage.lower(),
+                                "error": errors[lbl]})
+            logging.info(f"  Survived: {survived if survived else 'none'}")
+            logging.info("=" * 60)
+            emit_event({"type": "port_status", "iteration": iteration_num,
+                        "failed": failed_ports, "survived": survived})
             passed = False
 
         return passed
