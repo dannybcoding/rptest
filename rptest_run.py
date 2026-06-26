@@ -60,29 +60,46 @@ def emit_event(obj):
             pass
 
 # ---------------------------------------------------------------------------
-# Log rotation
+# Logging setup
 # ---------------------------------------------------------------------------
+# Configured by setup_logging() from main(), NOT at import time — importing this
+# module (e.g. from a test or the GUI) must not rotate log files or seize the
+# stdout handler. Functions below log to the root logger; before setup_logging
+# runs, those calls fall through to Python's default last-resort handler.
 CURRENT_LOG = 'serial_test.log'
 BACKUP_LOG  = 'serial_test_old.log'
 
-def rotate_log():
-    if os.path.exists(CURRENT_LOG):
-        if os.path.exists(BACKUP_LOG):
-            os.remove(BACKUP_LOG)
-        os.rename(CURRENT_LOG, BACKUP_LOG)
+def rotate_log(logfile, backup):
+    """Rename an existing log to its backup so each run starts fresh."""
+    if os.path.exists(logfile):
+        if os.path.exists(backup):
+            os.remove(backup)
+        os.rename(logfile, backup)
 
-rotate_log()
+def setup_logging(logfile=CURRENT_LOG, debug=False):
+    """Install the file + console log handlers. Idempotent: any handlers from a
+    previous call are removed first, so re-running (or a test) doesn't duplicate."""
+    backup = BACKUP_LOG if logfile == CURRENT_LOG else logfile + '.old'
+    rotate_log(logfile, backup)
 
-handler = RotatingFileHandler(CURRENT_LOG, maxBytes=5 * 1024 * 1024, backupCount=1)
-logging.basicConfig(
-    handlers=[handler],
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-console = logging.StreamHandler(sys.stdout)
-console.setLevel(logging.INFO)
-console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-logging.getLogger('').addHandler(console)
+    root = logging.getLogger('')
+    for h in list(root.handlers):
+        root.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+    root.setLevel(logging.DEBUG)
+
+    file_handler = RotatingFileHandler(logfile, maxBytes=5 * 1024 * 1024, backupCount=1)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    root.addHandler(file_handler)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.DEBUG if debug else logging.INFO)
+    console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    root.addHandler(console)
 
 # ---------------------------------------------------------------------------
 # Global stop / terminate events
@@ -948,6 +965,8 @@ def parse_args():
 def main():
     args = parse_args()
 
+    setup_logging(args.logfile, debug=bool(args.dex))
+
     global JSON_OUT
     JSON_OUT = bool(args.json)
 
@@ -998,10 +1017,6 @@ def main():
         dut=args.dut,
         aux=args.aux,
     )
-
-    if args.dex:
-        logging.getLogger('').setLevel(logging.DEBUG)
-        console.setLevel(logging.DEBUG)
 
     pattern = build_pattern(tbp_hex=args.tbp, ctx_file=args.ctx, buf_size=args.bss)
 
