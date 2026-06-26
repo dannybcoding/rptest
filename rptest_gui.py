@@ -9,7 +9,7 @@ import os
 import subprocess
 import threading
 import time
-import re
+import json
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
@@ -127,9 +127,9 @@ def apply_dark_theme(app):
 # Worker thread — runs the subprocess
 # -----------------------------------------------------------------------
 class TestRunner(QThread):
-    log_line   = pyqtSignal(str)   # raw output line
-    finished   = pyqtSignal(int)   # exit code
-    stats_update = pyqtSignal(dict) # parsed stats
+    log_line = pyqtSignal(str)    # raw (non-JSON) output line, for the log pane
+    event    = pyqtSignal(dict)   # structured JSON event from the backend
+    finished = pyqtSignal(int)    # exit code
 
     def __init__(self, cmd):
         super().__init__()
@@ -147,8 +147,11 @@ class TestRunner(QThread):
         )
         for line in self.process.stdout:
             line = line.rstrip('\n')
-            self.log_line.emit(line)
-            self._parse_stats(line)
+            ev = self._as_event(line)
+            if ev is not None:
+                self.event.emit(ev)        # structured stats — never regex-scraped
+            else:
+                self.log_line.emit(line)   # human log text -> log pane
             if self._stop:
                 self.process.terminate()
                 break
@@ -160,27 +163,18 @@ class TestRunner(QThread):
         if self.process:
             self.process.terminate()
 
-    def _parse_stats(self, line):
-        stats = {}
-        # Iteration result
-        m = re.search(r'Iteration (\d+): (PASS|FAIL)\s+\((\d+) pass / (\d+) fail\)', line)
-        if m:
-            stats['iteration'] = int(m.group(1))
-            stats['result']    = m.group(2)
-            stats['pass']      = int(m.group(3))
-            stats['fail']      = int(m.group(4))
-        # Sent / Received / Dropped
-        ms = re.search(r'Sent:\s+(\d+)\s+bytes', line)
-        if ms:
-            stats['last_sent'] = int(ms.group(1))
-        mr = re.search(r'Received:\s+(\d+)\s+bytes', line)
-        if mr:
-            stats['last_recv'] = int(mr.group(1))
-        md = re.search(r'Dropped:\s+(\d+)\s+bytes', line)
-        if md:
-            stats['last_drop'] = int(md.group(1))
-        if stats:
-            self.stats_update.emit(stats)
+    @staticmethod
+    def _as_event(line):
+        """Return the parsed event dict if this line is a JSON event, else None.
+        Log lines never start with '{', so the check is cheap and unambiguous."""
+        s = line.lstrip()
+        if not s.startswith('{'):
+            return None
+        try:
+            obj = json.loads(s)
+        except ValueError:
+            return None
+        return obj if isinstance(obj, dict) and 'type' in obj else None
 
 
 # -----------------------------------------------------------------------
@@ -575,10 +569,11 @@ class MainWindow(QMainWindow):
         self.stat_iter   = make_pair("Iteration",  0)
         self.stat_pass   = make_pair("Pass",        1)
         self.stat_fail   = make_pair("Fail",        2)
-        self.stat_sent   = make_pair("Last Sent",   3)
-        self.stat_recv   = make_pair("Last Recv",   4)
-        self.stat_drop   = make_pair("Last Drop",   5)
-        self.stat_time   = make_pair("Elapsed",     6)
+        self.stat_sent   = make_pair("Sent",        3)
+        self.stat_recv   = make_pair("Recv",        4)
+        self.stat_drop   = make_pair("Dropped",     5)
+        self.stat_extra  = make_pair("Extra",       6)
+        self.stat_time   = make_pair("Elapsed",     7)
 
         parent_layout.addWidget(grp)
 
@@ -722,6 +717,7 @@ class MainWindow(QMainWindow):
         if self.ctx_edit.text().strip():
             add('-ctx', self.ctx_edit.text().strip())
 
+        cmd.append('--json')   # structured events for the live stats
         return cmd
 
     def _sync_port_devices(self, *args, initial=False):
@@ -767,26 +763,43 @@ class MainWindow(QMainWindow):
         self.log_edit.insertHtml(self._colorize(line) + '<br>')
         self.log_edit.moveCursor(QTextCursor.End)
 
-    def _update_stats(self, stats):
-        if 'iteration' in stats:
-            self.stat_iter.setText(str(stats['iteration']))
-        if 'pass' in stats:
-            self.stat_pass.setText(str(stats['pass']))
-            self.stat_pass.setStyleSheet("color: #60e080; font-weight: bold; font-size: 13px;")
-        if 'fail' in stats:
-            v = stats['fail']
-            self.stat_fail.setText(str(v))
-            color = '#ff6060' if v > 0 else '#e0e0e0'
-            self.stat_fail.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px;")
-        if 'last_sent' in stats:
-            self.stat_sent.setText(f"{stats['last_sent']:,} B")
-        if 'last_recv' in stats:
-            self.stat_recv.setText(f"{stats['last_recv']:,} B")
-        if 'last_drop' in stats:
-            v = stats['last_drop']
-            self.stat_drop.setText(f"{v:,} B")
-            color = '#ff6060' if v > 0 else '#60e080'
-            self.stat_drop.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px;")
+    # -------------------------------------------------------------------
+    # Structured-event handling (replaces log scraping)
+    # -------------------------------------------------------------------
+    _GREEN   = "color: #60e080; font-weight: bold; font-size: 13px;"
+    _RED     = "color: #ff6060; font-weight: bold; font-size: 13px;"
+    _NEUTRAL = "color: #e0e0e0; font-weight: bold; font-size: 13px;"
+
+    def _on_event(self, ev):
+        t = ev.get('type')
+
+        if t in ('iteration_start', 'iteration_result'):
+            self.stat_iter.setText(str(ev.get('iteration', '—')))
+
+        if t == 'iteration_result':
+            p = ev.get('pass', 0)
+            f = ev.get('fail', 0)
+            self.stat_pass.setText(str(p))
+            self.stat_pass.setStyleSheet(self._GREEN)
+            self.stat_fail.setText(str(f))
+            self.stat_fail.setStyleSheet(self._RED if f > 0 else self._NEUTRAL)
+
+        elif t == 'iteration_totals':
+            self.stat_sent.setText(f"{ev.get('sent', 0):,} B")
+            self.stat_recv.setText(f"{ev.get('received', 0):,} B")
+            d = ev.get('dropped', 0)
+            self.stat_drop.setText(f"{d:,} B")
+            self.stat_drop.setStyleSheet(self._RED if d > 0 else self._GREEN)
+            x = ev.get('extra', 0)
+            self.stat_extra.setText(f"{x:,} B")
+            self.stat_extra.setStyleSheet(self._RED if x > 0 else self._GREEN)
+
+        elif t == 'verify' and not ev.get('ok', True):
+            # Surface the richer per-link breakdown the old GUI never had.
+            self._append_log(
+                f"  verify FAIL {ev.get('sender')} -> {ev.get('receiver')}: "
+                f"dropped={ev.get('dropped')} out_of_order={ev.get('out_of_order')} "
+                f"corrupted={ev.get('corrupted')}")
 
     def _tick(self):
         if self.run_start is not None:
@@ -809,7 +822,7 @@ class MainWindow(QMainWindow):
 
         self.runner = TestRunner(cmd)
         self.runner.log_line.connect(self._append_log)
-        self.runner.stats_update.connect(self._update_stats)
+        self.runner.event.connect(self._on_event)
         self.runner.finished.connect(self._on_finished)
         self.runner.start()
 
@@ -821,7 +834,7 @@ class MainWindow(QMainWindow):
 
         # Reset stats
         for w in [self.stat_iter, self.stat_pass, self.stat_fail,
-                  self.stat_sent, self.stat_recv, self.stat_drop]:
+                  self.stat_sent, self.stat_recv, self.stat_drop, self.stat_extra]:
             w.setText("—")
             w.setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 13px;")
         self.stat_time.setText("00:00:00")

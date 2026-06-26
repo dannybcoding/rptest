@@ -36,7 +36,27 @@ import argparse
 import os
 import re
 import zlib
+import json
 from logging.handlers import RotatingFileHandler
+
+# ---------------------------------------------------------------------------
+# Structured event stream (--json)
+# ---------------------------------------------------------------------------
+# When --json is set, the runner prints one JSON object per line to stdout, in
+# addition to the human-readable log. The GUI consumes these structured events
+# for its live stats instead of regex-scraping log strings, so changing a log
+# message can never silently break the display. Each event is a dict with a
+# "type" field. Human log lines and JSON lines share stdout; the GUI tells them
+# apart by trying json.loads (log lines never start with '{').
+JSON_OUT = False
+
+def emit_event(obj):
+    """Emit one structured event as a JSON line (no-op unless --json is set)."""
+    if JSON_OUT:
+        try:
+            print(json.dumps(obj), flush=True)
+        except (TypeError, ValueError):
+            pass
 
 # ---------------------------------------------------------------------------
 # Log rotation
@@ -459,7 +479,7 @@ def receive_data(port, cfg, received_count, verifiers, recv_elapsed, senders_don
 # Data verification
 # ---------------------------------------------------------------------------
 
-def verify_data(sent_frames, verifiers, verify_pairs):
+def verify_data(sent_frames, verifiers, verify_pairs, iteration=None):
     """
     Frame-aware verification, read from the per-port streaming verifiers.
 
@@ -482,6 +502,12 @@ def verify_data(sent_frames, verifiers, verify_pairs):
 
         ok = (v.dropped == 0 and v.crc_errors == 0 and v.out_of_order == 0
               and not v.unexpected and v.received_ok == expected)
+
+        emit_event({"type": "verify", "iteration": iteration,
+                    "sender": sender, "receiver": receiver, "ok": ok,
+                    "expected": expected, "received_ok": v.received_ok,
+                    "dropped": v.dropped, "out_of_order": v.out_of_order,
+                    "corrupted": v.crc_errors})
 
         if ok:
             logging.info(f"  PASS  {sender} -> {receiver}  "
@@ -608,6 +634,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
     senders_done   = threading.Event()
 
     logging.info(f"--- Iteration {iteration_num} start ---")
+    emit_event({"type": "iteration_start", "iteration": iteration_num})
 
     try:
         # Open every participating port exactly once.
@@ -701,25 +728,36 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
             logging.info(f"    Dropped:  {d:>10} bytes")
             if x:
                 logging.info(f"    Extra:    {x:>10} bytes  (received MORE than sent)")
+            emit_event({"type": "pair_result", "iteration": iteration_num,
+                        "sender": sender, "receiver": receiver,
+                        "sent": s, "received": r, "dropped": d, "extra": x,
+                        "sent_bps": round(s_rate), "recv_bps": round(r_rate),
+                        "sent_s": round(s_el, 2), "recv_s": round(r_el, 2)})
         total_sent     = sum(sent_count.values())
         total_received = sum(received_count.values())
         logging.info(f"  TOTALS  sent={total_sent}  received={total_received}  "
                      f"dropped={sum(dropped.values())}  extra={sum(extra.values())}")
         logging.info("=" * 60)
+        emit_event({"type": "iteration_totals", "iteration": iteration_num,
+                    "sent": total_sent, "received": total_received,
+                    "dropped": sum(dropped.values()), "extra": sum(extra.values())})
 
         # Modem line snapshot — informational context, no effect on pass/fail.
         logging.info("MODEM STATUS")
+        modem_all = {}
         for name in all_ports:
             modem = read_modem_lines(port_objs[name])
+            modem_all[name] = modem
             modem_str = ' '.join(
                 f"{k.upper()}={'1' if v else '0'}" if v is not None else f"{k.upper()}=?"
                 for k, v in modem.items())
             logging.info(f"  {name}: {modem_str}")
         logging.info("=" * 60)
+        emit_event({"type": "modem", "iteration": iteration_num, "ports": modem_all})
 
         passed = True
         if cfg['ver']:
-            passed = verify_data(sent_frames, verifiers, verify_pairs)
+            passed = verify_data(sent_frames, verifiers, verify_pairs, iteration_num)
         elif any(v > 0 for v in dropped.values()):
             logging.error("Dropped bytes detected (frame verify disabled).")
             passed = False
@@ -827,6 +865,9 @@ def parse_args():
                    help='Verbose/debug output 0=no 1=yes')
     p.add_argument('--logfile', default=CURRENT_LOG, metavar='PATH',
                    help=f'Log file path (default: {CURRENT_LOG})')
+    p.add_argument('--json', action='store_true',
+                   help='Also emit structured JSON-lines events on stdout '
+                        '(used by the GUI; immune to log-wording changes)')
     return p.parse_args()
 
 # ---------------------------------------------------------------------------
@@ -835,6 +876,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    global JSON_OUT
+    JSON_OUT = bool(args.json)
 
     if not args.bxp and not args.rxp and not args.txp:
         print("ERROR: Specify at least one of -bxp, -rxp, -txp")
@@ -898,6 +942,14 @@ def main():
     logging.info(f"  Reps: {args.rep}  SleepBetween: {args.slp}ms  Verify: {cfg['ver']}")
     logging.info("=" * 60)
 
+    emit_event({
+        "type": "run_start",
+        "bx": bx_indices, "tx": tx_indices, "rx": rx_indices,
+        "tx_dev": tx_dev, "rx_dev": rx_dev,
+        "bps": cfg['bps'], "bss": cfg['bss'], "ttr": cfg['ttr'],
+        "rep": args.rep, "ver": cfg['ver'],
+    })
+
     iteration  = 0
     total_pass = 0
     total_fail = 0
@@ -915,9 +967,13 @@ def main():
             if passed:
                 total_pass += 1
                 logging.info(f"Iteration {iteration}: PASS  ({total_pass} pass / {total_fail} fail)")
+                emit_event({"type": "iteration_result", "iteration": iteration,
+                            "result": "PASS", "pass": total_pass, "fail": total_fail})
             else:
                 total_fail += 1
                 logging.error(f"Iteration {iteration}: FAIL  ({total_pass} pass / {total_fail} fail)")
+                emit_event({"type": "iteration_result", "iteration": iteration,
+                            "result": "FAIL", "pass": total_pass, "fail": total_fail})
                 logging.error("Stopping due to failure.")
                 break
 
@@ -939,6 +995,9 @@ def main():
     logging.info(f"  Iterations: {iteration}  Passed: {total_pass}  Failed: {total_fail}")
     logging.info(f"  Result: {'PASS' if total_fail == 0 else 'FAIL'}")
     logging.info("=" * 60)
+    emit_event({"type": "run_complete",
+                "result": "PASS" if total_fail == 0 else "FAIL",
+                "iterations": iteration, "passed": total_pass, "failed": total_fail})
     sys.exit(0 if total_fail == 0 else 1)
 
 
