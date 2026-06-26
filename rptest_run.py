@@ -577,6 +577,58 @@ def verify_data(sent_frames, verifiers, verify_pairs, iteration=None):
 # Port open helper
 # ---------------------------------------------------------------------------
 
+_flow_warned = set()
+
+def _warn_once(msg):
+    """Log a flow-control warning at most once per process (avoids 16x spam when
+    the same unsupported setting applies to every port)."""
+    if msg not in _flow_warned:
+        _flow_warned.add(msg)
+        logging.warning(msg)
+
+def _apply_flow_control(port, name, cfg):
+    """Apply RTS/CTS/DTR settings, honoring what Linux + pyserial actually do and
+    warning (once) about any selected mode that can't be applied — so a chosen
+    mode is never a silent no-op.
+
+    Effective on Linux serial:
+      RTS=handshake(2) + CTS=handshake(1) -> RTS/CTS hardware flow control (rtscts)
+      RTS/DTR = off(0)/on(1)              -> static line level
+      RTS=toggle(3)                       -> RS-485 auto-direction, if the driver
+                                             implements TIOCSRS485
+    Not applicable on Linux serial (warned, not silently dropped):
+      DTR=handshake(2)    (DSR/DTR hardware flow control is Windows-only in pyserial)
+      CTS=hsIfRtsToggle(0)
+    """
+    rts, cts, dtr = cfg['rts'], cfg['cts'], cfg['dtr']
+
+    # Plain off/on modes drive the line level directly (only when not handshaking).
+    if rts in (0, 1):
+        port.rts = (rts == 1)
+    if dtr in (0, 1):
+        port.dtr = (dtr == 1)
+
+    # RTS=toggle -> let the kernel driver flip RTS around each transmit (RS-485).
+    if rts == 3:
+        try:
+            import serial.rs485
+            port.rs485_mode = serial.rs485.RS485Settings(
+                rts_level_for_tx=True, rts_level_for_rx=False)
+        except Exception as e:
+            _warn_once(f"RTS=toggle (RS-485) could not be applied: the driver/"
+                       f"pyserial doesn't support TIOCSRS485 here ({e}).")
+
+    # Selections with no effect on Linux serial — report rather than ignore.
+    if rts == 2 and cts != 1:
+        _warn_once("RTS=handshake requires CTS=handshake to enable RTS/CTS flow "
+                   "control; with the current CTS setting it is NOT active.")
+    if dtr == 2:
+        _warn_once("DTR=handshake (DSR/DTR hardware flow control) is not supported "
+                   "on Linux serial and has no effect.")
+    if cts == 0:
+        _warn_once("CTS=hsIfRtsToggle has no host-side equivalent on Linux and "
+                   "has no effect.")
+
 def open_port(name, cfg):
     parity_map   = {0: serial.PARITY_NONE, 1: serial.PARITY_ODD,
                     2: serial.PARITY_EVEN, 3: serial.PARITY_MARK,
@@ -585,6 +637,9 @@ def open_port(name, cfg):
                     1: serial.STOPBITS_ONE_POINT_FIVE,
                     2: serial.STOPBITS_TWO}
 
+    # RTS/CTS hardware flow control needs both ends set to handshake. XON/XOFF is
+    # software flow control. Everything else (static lines, RS-485 toggle, and the
+    # unsupported modes) is handled in _apply_flow_control after the port is open.
     rtscts  = (cfg['rts'] == 2 and cfg['cts'] == 1)
     xonxoff = bool(cfg['xon'])
 
@@ -599,10 +654,7 @@ def open_port(name, cfg):
         timeout       = cfg['rtc'] / 1000.0,
         write_timeout = cfg['wtc'] / 1000.0,
     )
-    if cfg['rts'] == 1:
-        port.rts = True
-    if cfg['dtr'] == 1:
-        port.dtr = True
+    _apply_flow_control(port, name, cfg)
     return port
 
 # ---------------------------------------------------------------------------
@@ -919,13 +971,18 @@ def parse_args():
     p.add_argument('-sbs', type=int, default=0, choices=[0, 1, 2],
                    help='Stop bits 0=1 1=1.5 2=2')
     p.add_argument('-rts', type=int, default=0, choices=[0, 1, 2, 3],
-                   help='RTS 0=off 1=on 2=handshake 3=toggle')
+                   help='RTS 0=off 1=on 2=handshake 3=toggle(RS-485). '
+                        'RTS=2 with CTS=1 enables RTS/CTS flow control; '
+                        'RTS=3 needs a driver with TIOCSRS485')
     p.add_argument('-cts', type=int, default=0,
-                   help='CTS -1=off 0=hsIfRtsToggle 1=handshake')
+                   help='CTS -1=off 0=hsIfRtsToggle 1=handshake. '
+                        'CTS=1 with RTS=2 enables RTS/CTS flow control; '
+                        'CTS=0 has no effect on Linux')
     p.add_argument('-dtr', type=int, default=0, choices=[0, 1, 2],
-                   help='DTR 0=off 1=on 2=handshake')
+                   help='DTR 0=off 1=on 2=handshake (handshake has no effect on '
+                        'Linux serial)')
     p.add_argument('-xon', type=int, default=0, choices=[0, 1],
-                   help='Xon/Xoff 0=off 1=on')
+                   help='Xon/Xoff software flow control 0=off 1=on')
     p.add_argument('-qui', type=int, default=4096, metavar='N',
                    help='Input queue size bytes')
     p.add_argument('-quo', type=int, default=4096, metavar='N',
