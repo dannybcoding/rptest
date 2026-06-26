@@ -35,6 +35,7 @@ import sys
 import argparse
 import os
 import re
+import zlib
 from logging.handlers import RotatingFileHandler
 
 # ---------------------------------------------------------------------------
@@ -146,19 +147,92 @@ def build_pattern(tbp_hex=None, ctx_file=None, buf_size=1152):
     return (base_bytes * ((buf_size // len(base_bytes)) + 1))[:buf_size]
 
 # ---------------------------------------------------------------------------
+# Sequence-framed payload helpers
+# ---------------------------------------------------------------------------
+# Each buffer is wrapped in a self-describing frame so the receiver can tell
+# *which* buffers arrived, in what order, and whether they were corrupted —
+# instead of one opaque byte-stream compare that desyncs on a single dropped
+# byte.
+#
+#   +--------+--------+--------+------------------+--------+
+#   | SYNC   | SEQ    | LEN    | PAYLOAD          | CRC32  |
+#   | 4 B    | 4 B BE | 2 B BE | LEN B            | 4 B BE |
+#   +--------+--------+--------+------------------+--------+
+#
+#   SYNC : fixed marker, used only to re-locate frame boundaries after a gap.
+#   SEQ  : per-port frame counter from 0 (detects drops / dupes / reordering).
+#   LEN  : payload length in bytes.
+#   CRC32: zlib.crc32 over SEQ + LEN + PAYLOAD (detects corruption).
+#
+# CRC validation makes the SYNC marker safe even if the same bytes occur inside
+# a payload: a false hit fails CRC and the scanner advances one byte and keeps
+# hunting. In the normal no-loss path the parser jumps frame-to-frame and never
+# scans payload at all.
+
+FRAME_SYNC     = b'\xA5\x5A\xA5\x5A'
+FRAME_OVERHEAD = len(FRAME_SYNC) + 4 + 2 + 4      # sync + seq + len + crc = 14
+
+def build_frame(seq, pattern, payload_len):
+    """Wrap one payload slice in a sequence-numbered, CRC-protected frame."""
+    payload = bytes(pattern[:payload_len])
+    body    = seq.to_bytes(4, 'big') + payload_len.to_bytes(2, 'big') + payload
+    crc     = zlib.crc32(body) & 0xFFFFFFFF
+    return FRAME_SYNC + body + crc.to_bytes(4, 'big')
+
+def parse_frames(raw):
+    """
+    Recover frames from a received byte buffer.
+
+    Returns (seqs, crc_errors, resync_bytes):
+      seqs         - SEQ numbers of CRC-valid frames, in arrival order
+      crc_errors   - sync hits whose CRC failed (corruption or false hit)
+      resync_bytes - bytes skipped while hunting for the next valid frame
+    """
+    raw          = bytes(raw)
+    n            = len(raw)
+    seqs         = []
+    crc_errors   = 0
+    resync_bytes = 0
+    i            = 0
+    slen         = len(FRAME_SYNC)
+
+    while i + FRAME_OVERHEAD <= n:
+        if raw[i:i + slen] != FRAME_SYNC:
+            i += 1
+            resync_bytes += 1
+            continue
+        length    = int.from_bytes(raw[i + slen + 4:i + slen + 6], 'big')
+        frame_end = i + slen + 6 + length + 4
+        if frame_end > n:
+            break                              # incomplete trailing frame
+        body      = raw[i + slen:i + slen + 6 + length]
+        crc_recv  = int.from_bytes(raw[frame_end - 4:frame_end], 'big')
+        if (zlib.crc32(body) & 0xFFFFFFFF) == crc_recv:
+            seq = int.from_bytes(raw[i + slen:i + slen + 4], 'big')
+            seqs.append(seq)
+            i = frame_end                      # jump straight to the next frame
+        else:
+            crc_errors += 1
+            i += 1                             # false / corrupt sync -> resync
+            resync_bytes += 1
+
+    return seqs, crc_errors, resync_bytes
+
+# ---------------------------------------------------------------------------
 # I/O worker threads
 # ---------------------------------------------------------------------------
 
-def send_data(port, cfg, sent_count, sent_data, pattern):
+def send_data(port, cfg, sent_count, sent_frames, pattern):
     # `port` may be shared with a receive_data thread (bidirectional -bxp).
     # This thread must NOT close the handle — closing would yank it out from
     # under its receive thread mid-drain. run_iteration closes centrally once
     # every thread has stopped.
     port_name   = port.port
-    buf_size    = cfg['bss']
+    payload_len = cfg['payload_len']
     btw_sec     = cfg['btw'] / 1000.0
     ttr_sec     = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
     nob         = cfg['nob']
+    seq         = 0
 
     try:
         time.sleep(0.5)
@@ -171,19 +245,19 @@ def send_data(port, cfg, sent_count, sent_data, pattern):
             if nob >= 0 and buffers_sent >= nob:
                 break
 
-            chunk = pattern[:buf_size]
+            frame = build_frame(seq, pattern, payload_len)
             try:
-                port.write(chunk)
+                port.write(frame)
             except serial.SerialTimeoutException:
                 logging.warning(f"[{port_name}] Write timeout")
                 if cfg['res']:
-                    continue
+                    continue          # resend same seq; nothing counted yet
                 break
 
-            sent_count[port_name] += len(chunk)
-            if cfg['ver']:
-                sent_data[port_name].extend(chunk)
-            buffers_sent += 1
+            sent_count[port_name]  += len(frame)
+            buffers_sent           += 1
+            seq                    += 1
+            sent_frames[port_name]  = buffers_sent
 
             if cfg['verbose']:
                 elapsed = time.time() - start_time
@@ -272,25 +346,66 @@ def receive_data(port, cfg, received_count, received_data, senders_done):
 # Data verification
 # ---------------------------------------------------------------------------
 
-def verify_data(sent_data, received_data, verify_pairs):
+def verify_data(sent_frames, received_data, verify_pairs):
+    """
+    Frame-aware verification.
+
+    We know how many frames each sender wrote (their SEQ numbers run 0..N-1).
+    We parse the received buffer back into frames and report exactly what
+    happened to each link: dropped, corrupted, duplicated or reordered frames —
+    instead of a single opaque "first mismatch @ byte N" that a one-byte drop
+    would otherwise smear across the whole stream.
+    """
     all_ok = True
     logging.info("=" * 60)
-    logging.info("DATA VERIFICATION")
+    logging.info("DATA VERIFICATION (frame-level)")
     logging.info("=" * 60)
+
     for sender, receiver in verify_pairs:
-        sent     = bytes(sent_data.get(sender, b''))
-        received = bytes(received_data.get(receiver, b''))
-        if sent == received:
-            logging.info(f"  PASS  {sender} -> {receiver}  ({len(sent)} bytes match)")
+        expected              = sent_frames.get(sender, 0)
+        seqs, crc_err, resync = parse_frames(received_data.get(receiver, b''))
+
+        seen = {}
+        for s in seqs:
+            seen[s] = seen.get(s, 0) + 1
+        unique       = set(seen)
+        expected_set = set(range(expected))
+
+        missing    = sorted(expected_set - unique)        # dropped frames
+        unexpected = sorted(unique - expected_set)        # never-sent SEQs
+        duplicates = sum(c - 1 for c in seen.values() if c > 1)
+
+        # Reordering: did the first sighting of each SEQ arrive in order?
+        first_seen, marked = [], set()
+        for s in seqs:
+            if s not in marked:
+                marked.add(s)
+                first_seen.append(s)
+        reordered = first_seen != sorted(first_seen)
+
+        ok = (not missing and not unexpected and not duplicates
+              and not reordered and crc_err == 0 and len(unique) == expected)
+
+        if ok:
+            logging.info(f"  PASS  {sender} -> {receiver}  "
+                         f"({expected} frames, all present and in order)")
         else:
             all_ok = False
-            mismatch_idx = next(
-                (i for i, (s, r) in enumerate(zip(sent, received)) if s != r),
-                min(len(sent), len(received))
-            )
-            logging.info(f"  FAIL  {sender} -> {receiver}  "
-                         f"sent={len(sent)}B received={len(received)}B "
-                         f"first mismatch @ byte {mismatch_idx}")
+            logging.info(f"  FAIL  {sender} -> {receiver}")
+            logging.info(f"        sent={expected}  received_ok={len(unique)}  "
+                         f"dropped={len(missing)}  duplicated={duplicates}  "
+                         f"corrupted={crc_err}  "
+                         f"reordered={'yes' if reordered else 'no'}")
+            if missing:
+                preview = ', '.join(map(str, missing[:10]))
+                more    = '' if len(missing) <= 10 else f' (+{len(missing) - 10} more)'
+                logging.info(f"        dropped SEQs: {preview}{more}")
+            if unexpected:
+                preview = ', '.join(map(str, unexpected[:10]))
+                logging.info(f"        unexpected SEQs (never sent): {preview}")
+            if resync:
+                logging.info(f"        {resync} byte(s) skipped during resync")
+
     logging.info("=" * 60)
     return all_ok
 
@@ -369,7 +484,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
     rx_threads     = []
     sent_count     = {}
     received_count = {}
-    sent_data      = {}
+    sent_frames    = {}   # name -> number of frames written
     received_data  = {}
     port_objs      = {}   # name -> Serial (opened once, may host TX and RX)
     senders_done   = threading.Event()
@@ -394,11 +509,11 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
 
         # One send thread per sending port.
         for name in send_ports:
-            sent_count[name] = 0
-            sent_data[name]  = bytearray()
+            sent_count[name]  = 0
+            sent_frames[name] = 0
             t = threading.Thread(
                 target=send_data,
-                args=(port_objs[name], cfg, sent_count, sent_data, pattern),
+                args=(port_objs[name], cfg, sent_count, sent_frames, pattern),
                 name=f"TX-{name}", daemon=True)
             threads.append(t); tx_threads.append(t)
 
@@ -466,9 +581,9 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
 
         passed = True
         if cfg['ver']:
-            passed = verify_data(sent_data, received_data, verify_pairs)
-        if any(v > 0 for v in dropped.values()):
-            logging.error("Dropped bytes detected.")
+            passed = verify_data(sent_frames, received_data, verify_pairs)
+        elif any(v > 0 for v in dropped.values()):
+            logging.error("Dropped bytes detected (frame verify disabled).")
             passed = False
 
         return passed
@@ -485,7 +600,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
                     p.close()
             except Exception:
                 pass
-        sent_data.clear()
+        sent_frames.clear()
         received_data.clear()
 
 # ---------------------------------------------------------------------------
@@ -546,7 +661,8 @@ def parse_args():
     p.add_argument('-wtc', type=int, default=15600, metavar='MS',
                    help='WriteTotalTimeoutConstant ms')
     p.add_argument('-bss', type=int, default=1152, metavar='N',
-                   help='Buffer/chunk size bytes (default 1152)')
+                   help='On-wire frame size bytes (default 1152); usable payload '
+                        'is this minus 14 B of frame overhead')
     p.add_argument('-nob', type=int, default=-1, metavar='N',
                    help='Max buffers per port (-1=infinite)')
     p.add_argument('-ttr', type=int, default=-1, metavar='MS',
@@ -583,6 +699,14 @@ def main():
         sys.exit(f"ERROR: Invalid baud rate {args.bps}. "
                  f"Valid: {', '.join(map(str, valid_baudrates))}")
 
+    if args.bss <= FRAME_OVERHEAD:
+        sys.exit(f"ERROR: -bss must be greater than {FRAME_OVERHEAD} "
+                 f"(frame overhead). Got {args.bss}.")
+    payload_len = args.bss - FRAME_OVERHEAD
+    if payload_len > 0xFFFF:
+        sys.exit(f"ERROR: -bss too large; payload {payload_len} B exceeds the "
+                 f"65535-byte frame limit. Use -bss <= {0xFFFF + FRAME_OVERHEAD}.")
+
     bx_indices = parse_port_range(args.bxp) if args.bxp else []
     tx_dev, tx_indices = parse_device_ports(args.txp, args.dut)
     rx_dev, rx_indices = parse_device_ports(args.rxp, args.aux)
@@ -602,6 +726,7 @@ def main():
         rts=args.rts, cts=args.cts, dtr=args.dtr, xon=args.xon,
         qui=args.qui, quo=args.quo, rtc=args.rtc, wtc=args.wtc,
         bss=args.bss, nob=args.nob, ttr=args.ttr,
+        payload_len=payload_len,
         res=bool(args.res), btw=args.btw, ver=bool(args.ver),
         flb=bool(args.flb), verbose=bool(args.dex),
         dut=args.dut,
@@ -621,7 +746,7 @@ def main():
     logging.info(f"  TX ports : {tx_indices} (device {tx_dev})  ->  RX ports : {rx_indices} (device {rx_dev})")
     logging.info(f"  Baud: {cfg['bps']}  DataBits: {cfg['dbs']}  Parity: {cfg['par']}  StopBits: {cfg['sbs']}")
     logging.info(f"  RTS: {cfg['rts']}  CTS: {cfg['cts']}  XonXoff: {cfg['xon']}")
-    logging.info(f"  BufSize: {cfg['bss']}B  MaxBufs: {cfg['nob']}  TTR: {cfg['ttr']}ms")
+    logging.info(f"  FrameSize: {cfg['bss']}B (payload {payload_len}B)  MaxBufs: {cfg['nob']}  TTR: {cfg['ttr']}ms")
     logging.info(f"  Reps: {args.rep}  SleepBetween: {args.slp}ms  Verify: {cfg['ver']}")
     logging.info("=" * 60)
 
