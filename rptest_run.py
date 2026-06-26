@@ -179,14 +179,39 @@ def build_frame(seq, pattern, payload_len):
     crc     = zlib.crc32(body) & 0xFFFFFFFF
     return FRAME_SYNC + body + crc.to_bytes(4, 'big')
 
+_SLEN = len(FRAME_SYNC)
+
+def _try_frame(raw, i, n):
+    """
+    Attempt to read one frame starting at offset i in buffer raw (length n).
+
+    Returns (kind, seq, next_i):
+      'ok'         - valid frame; seq set; next_i = end of this frame
+      'bad'        - SYNC matched but CRC failed; seq None; next_i = i + 1
+      'nosync'     - no SYNC at i;              seq None; next_i = i + 1
+      'incomplete' - SYNC matched but the frame runs past n; next_i = i
+                     (caller should stop and wait for more bytes)
+    """
+    if raw[i:i + _SLEN] != FRAME_SYNC:
+        return ('nosync', None, i + 1)
+    length    = int.from_bytes(raw[i + _SLEN + 4:i + _SLEN + 6], 'big')
+    frame_end = i + _SLEN + 6 + length + 4
+    if frame_end > n:
+        return ('incomplete', None, i)
+    body     = raw[i + _SLEN:i + _SLEN + 6 + length]
+    crc_recv = int.from_bytes(raw[frame_end - 4:frame_end], 'big')
+    if (zlib.crc32(body) & 0xFFFFFFFF) == crc_recv:
+        seq = int.from_bytes(raw[i + _SLEN:i + _SLEN + 4], 'big')
+        return ('ok', seq, frame_end)
+    return ('bad', None, i + 1)                # false / corrupt sync -> resync
+
 def parse_frames(raw):
     """
-    Recover frames from a received byte buffer.
+    Batch parser: recover every frame from a complete byte buffer at once.
+    Kept as a stateless utility (handy for offline analysis and self-tests);
+    the live receive path uses FrameVerifier instead so memory stays flat.
 
-    Returns (seqs, crc_errors, resync_bytes):
-      seqs         - SEQ numbers of CRC-valid frames, in arrival order
-      crc_errors   - sync hits whose CRC failed (corruption or false hit)
-      resync_bytes - bytes skipped while hunting for the next valid frame
+    Returns (seqs, crc_errors, resync_bytes).
     """
     raw          = bytes(raw)
     n            = len(raw)
@@ -194,29 +219,100 @@ def parse_frames(raw):
     crc_errors   = 0
     resync_bytes = 0
     i            = 0
-    slen         = len(FRAME_SYNC)
-
     while i + FRAME_OVERHEAD <= n:
-        if raw[i:i + slen] != FRAME_SYNC:
-            i += 1
-            resync_bytes += 1
-            continue
-        length    = int.from_bytes(raw[i + slen + 4:i + slen + 6], 'big')
-        frame_end = i + slen + 6 + length + 4
-        if frame_end > n:
-            break                              # incomplete trailing frame
-        body      = raw[i + slen:i + slen + 6 + length]
-        crc_recv  = int.from_bytes(raw[frame_end - 4:frame_end], 'big')
-        if (zlib.crc32(body) & 0xFFFFFFFF) == crc_recv:
-            seq = int.from_bytes(raw[i + slen:i + slen + 4], 'big')
+        kind, seq, nxt = _try_frame(raw, i, n)
+        if kind == 'incomplete':
+            break
+        if kind == 'ok':
             seqs.append(seq)
-            i = frame_end                      # jump straight to the next frame
-        else:
-            crc_errors += 1
-            i += 1                             # false / corrupt sync -> resync
+        elif kind == 'bad':
+            crc_errors   += 1
             resync_bytes += 1
-
+        else:                                  # 'nosync'
+            resync_bytes += 1
+        i = nxt
     return seqs, crc_errors, resync_bytes
+
+
+class FrameVerifier:
+    """
+    Streaming, constant-memory frame verifier — one instance per receiving port.
+
+    Bytes are pushed in with feed() as they arrive. Each complete frame is folded
+    into running counters and then thrown away, so memory stays flat no matter how
+    long the run is, instead of growing one full payload per buffer the way an
+    accumulate-then-compare approach does.
+
+    A serial / RealPort link is a FIFO byte channel: frames cannot truly arrive
+    out of order, so SEQ numbers from CRC-valid frames are expected to count up
+    0, 1, 2, … A forward jump in SEQ is a dropped run; a SEQ at or below one we
+    have already passed is a duplicate or framing anomaly (out_of_order).
+    """
+    MAX_DROP_RANGES = 32          # cap stored dropped-SEQ ranges for the report
+
+    def __init__(self):
+        self._buf          = bytearray()   # carry-over: at most one partial frame
+        self.expected_next = 0
+        self.received_ok   = 0
+        self.dropped       = 0
+        self.out_of_order  = 0
+        self.crc_errors    = 0
+        self.resync_bytes  = 0
+        self.max_seq       = -1
+        self.drop_ranges   = []
+        self.unexpected    = False
+        self._ranges_trunc = False
+
+    def feed(self, chunk):
+        buf = self._buf
+        buf.extend(chunk)
+        n = len(buf)
+        i = 0
+        while i + FRAME_OVERHEAD <= n:
+            kind, seq, nxt = _try_frame(buf, i, n)
+            if kind == 'incomplete':
+                break                          # wait for the rest of this frame
+            if kind == 'ok':
+                self._account(seq)
+            elif kind == 'bad':
+                self.crc_errors   += 1
+                self.resync_bytes += 1
+            else:                              # 'nosync'
+                self.resync_bytes += 1
+            i = nxt
+        if i:
+            del buf[:i]                        # drop everything already consumed
+
+    def _account(self, seq):
+        if seq == self.expected_next:
+            self.expected_next = seq + 1
+        elif seq > self.expected_next:
+            self._add_drop_range(self.expected_next, seq - 1)
+            self.expected_next = seq + 1
+        else:                                  # seq <= one we already passed
+            self.out_of_order += 1
+        self.received_ok += 1
+        if seq > self.max_seq:
+            self.max_seq = seq
+
+    def _add_drop_range(self, start, end):
+        self.dropped += (end - start + 1)
+        if len(self.drop_ranges) < self.MAX_DROP_RANGES:
+            self.drop_ranges.append((start, end))
+        else:
+            self._ranges_trunc = True
+
+    def finalize(self, expected):
+        """Call once after the run: any frames never seen at the tail are drops."""
+        if self.expected_next < expected:
+            self._add_drop_range(self.expected_next, expected - 1)
+            self.expected_next = expected
+        if self.max_seq >= expected:           # a SEQ the sender never wrote
+            self.unexpected = True
+
+    @property
+    def ranges_complete(self):
+        return not self._ranges_trunc
 
 # ---------------------------------------------------------------------------
 # I/O worker threads
@@ -284,7 +380,7 @@ def send_data(port, cfg, sent_count, sent_frames, pattern):
                 pass
 
 
-def receive_data(port, cfg, received_count, received_data, senders_done):
+def receive_data(port, cfg, received_count, verifiers, senders_done):
     """
     Drain the RX port until the senders are finished AND no new data has
     arrived for `quiet_grace` seconds. Do NOT stop merely because the clock
@@ -320,7 +416,7 @@ def receive_data(port, cfg, received_count, received_data, senders_done):
             if chunk:
                 received_count[port_name] += len(chunk)
                 if cfg['ver']:
-                    received_data[port_name].extend(chunk)
+                    verifiers[port_name].feed(chunk)   # fold + discard, flat memory
                 last_data_time = time.time()
 
                 if cfg['verbose']:
@@ -346,45 +442,29 @@ def receive_data(port, cfg, received_count, received_data, senders_done):
 # Data verification
 # ---------------------------------------------------------------------------
 
-def verify_data(sent_frames, received_data, verify_pairs):
+def verify_data(sent_frames, verifiers, verify_pairs):
     """
-    Frame-aware verification.
+    Frame-aware verification, read from the per-port streaming verifiers.
 
-    We know how many frames each sender wrote (their SEQ numbers run 0..N-1).
-    We parse the received buffer back into frames and report exactly what
-    happened to each link: dropped, corrupted, duplicated or reordered frames —
-    instead of a single opaque "first mismatch @ byte N" that a one-byte drop
-    would otherwise smear across the whole stream.
+    The parsing already happened incrementally as bytes arrived (FrameVerifier),
+    so here we just finalize each receiver and report what happened to each link:
+    dropped, corrupted or out-of-order frames — instead of a single opaque
+    "first mismatch @ byte N" that one dropped byte would smear across the stream.
     """
     all_ok = True
     logging.info("=" * 60)
-    logging.info("DATA VERIFICATION (frame-level)")
+    logging.info("DATA VERIFICATION (frame-level, streaming)")
     logging.info("=" * 60)
 
     for sender, receiver in verify_pairs:
-        expected              = sent_frames.get(sender, 0)
-        seqs, crc_err, resync = parse_frames(received_data.get(receiver, b''))
+        expected = sent_frames.get(sender, 0)
+        v        = verifiers.get(receiver)
+        if v is None:                          # verify disabled / no verifier
+            continue
+        v.finalize(expected)
 
-        seen = {}
-        for s in seqs:
-            seen[s] = seen.get(s, 0) + 1
-        unique       = set(seen)
-        expected_set = set(range(expected))
-
-        missing    = sorted(expected_set - unique)        # dropped frames
-        unexpected = sorted(unique - expected_set)        # never-sent SEQs
-        duplicates = sum(c - 1 for c in seen.values() if c > 1)
-
-        # Reordering: did the first sighting of each SEQ arrive in order?
-        first_seen, marked = [], set()
-        for s in seqs:
-            if s not in marked:
-                marked.add(s)
-                first_seen.append(s)
-        reordered = first_seen != sorted(first_seen)
-
-        ok = (not missing and not unexpected and not duplicates
-              and not reordered and crc_err == 0 and len(unique) == expected)
+        ok = (v.dropped == 0 and v.crc_errors == 0 and v.out_of_order == 0
+              and not v.unexpected and v.received_ok == expected)
 
         if ok:
             logging.info(f"  PASS  {sender} -> {receiver}  "
@@ -392,19 +472,19 @@ def verify_data(sent_frames, received_data, verify_pairs):
         else:
             all_ok = False
             logging.info(f"  FAIL  {sender} -> {receiver}")
-            logging.info(f"        sent={expected}  received_ok={len(unique)}  "
-                         f"dropped={len(missing)}  duplicated={duplicates}  "
-                         f"corrupted={crc_err}  "
-                         f"reordered={'yes' if reordered else 'no'}")
-            if missing:
-                preview = ', '.join(map(str, missing[:10]))
-                more    = '' if len(missing) <= 10 else f' (+{len(missing) - 10} more)'
+            logging.info(f"        sent={expected}  received_ok={v.received_ok}  "
+                         f"dropped={v.dropped}  out_of_order={v.out_of_order}  "
+                         f"corrupted={v.crc_errors}")
+            if v.drop_ranges:
+                preview = ', '.join(f"{a}" if a == b else f"{a}-{b}"
+                                    for a, b in v.drop_ranges[:10])
+                more = '' if (v.ranges_complete and len(v.drop_ranges) <= 10) else ' (+more)'
                 logging.info(f"        dropped SEQs: {preview}{more}")
-            if unexpected:
-                preview = ', '.join(map(str, unexpected[:10]))
-                logging.info(f"        unexpected SEQs (never sent): {preview}")
-            if resync:
-                logging.info(f"        {resync} byte(s) skipped during resync")
+            if v.unexpected:
+                logging.info(f"        saw SEQ >= {expected} never sent "
+                             f"(max seq seen = {v.max_seq})")
+            if v.resync_bytes:
+                logging.info(f"        {v.resync_bytes} byte(s) skipped during resync")
 
     logging.info("=" * 60)
     return all_ok
@@ -485,7 +565,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
     sent_count     = {}
     received_count = {}
     sent_frames    = {}   # name -> number of frames written
-    received_data  = {}
+    verifiers      = {}   # name -> FrameVerifier (streaming, flat memory)
     port_objs      = {}   # name -> Serial (opened once, may host TX and RX)
     senders_done   = threading.Event()
 
@@ -520,10 +600,10 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         # One receive thread per receiving port.
         for name in recv_ports:
             received_count[name] = 0
-            received_data[name]  = bytearray()
+            verifiers[name]      = FrameVerifier()
             t = threading.Thread(
                 target=receive_data,
-                args=(port_objs[name], cfg, received_count, received_data, senders_done),
+                args=(port_objs[name], cfg, received_count, verifiers, senders_done),
                 name=f"RX-{name}", daemon=True)
             threads.append(t); rx_threads.append(t)
 
@@ -581,7 +661,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
 
         passed = True
         if cfg['ver']:
-            passed = verify_data(sent_frames, received_data, verify_pairs)
+            passed = verify_data(sent_frames, verifiers, verify_pairs)
         elif any(v > 0 for v in dropped.values()):
             logging.error("Dropped bytes detected (frame verify disabled).")
             passed = False
@@ -601,7 +681,7 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
             except Exception:
                 pass
         sent_frames.clear()
-        received_data.clear()
+        verifiers.clear()
 
 # ---------------------------------------------------------------------------
 # Argument parsing
