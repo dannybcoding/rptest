@@ -664,23 +664,28 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         logging.info(f"ITERATION {iteration_num} RESULTS")
         logging.info("=" * 60)
         dropped = {}
+        extra   = {}
         for sender, receiver in verify_pairs:
             s      = sent_count.get(sender, 0)
             r      = received_count.get(receiver, 0)
             d      = max(0, s - r)
+            x      = max(0, r - s)
             s_el   = sent_elapsed.get(sender, 0.0)
             r_el   = recv_elapsed.get(receiver, 0.0)
             s_rate = s / s_el if s_el > 0 else 0
             r_rate = r / r_el if r_el > 0 else 0
             dropped[(sender, receiver)] = d
+            extra[(sender, receiver)]   = x
             logging.info(f"  {sender} -> {receiver}")
             logging.info(f"    Sent:     {s:>10} bytes  ({s_rate:>8.0f} B/s over {s_el:6.2f}s)")
             logging.info(f"    Received: {r:>10} bytes  ({r_rate:>8.0f} B/s over {r_el:6.2f}s)")
             logging.info(f"    Dropped:  {d:>10} bytes")
+            if x:
+                logging.info(f"    Extra:    {x:>10} bytes  (received MORE than sent)")
         total_sent     = sum(sent_count.values())
         total_received = sum(received_count.values())
         logging.info(f"  TOTALS  sent={total_sent}  received={total_received}  "
-                     f"dropped={sum(dropped.values())}")
+                     f"dropped={sum(dropped.values())}  extra={sum(extra.values())}")
         logging.info("=" * 60)
 
         passed = True
@@ -688,6 +693,14 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
             passed = verify_data(sent_frames, verifiers, verify_pairs)
         elif any(v > 0 for v in dropped.values()):
             logging.error("Dropped bytes detected (frame verify disabled).")
+            passed = False
+
+        # Receiving MORE than we sent means duplication or injected line noise.
+        # That's a failure in any mode: when verify is on, noise inserted between
+        # frames is skipped as resync and won't trip the frame checks, so this
+        # byte-count surplus is the signal that catches it.
+        if any(v > 0 for v in extra.values()):
+            logging.error("Extra bytes detected (received more than sent).")
             passed = False
 
         return passed
