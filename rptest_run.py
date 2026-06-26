@@ -318,7 +318,7 @@ class FrameVerifier:
 # I/O worker threads
 # ---------------------------------------------------------------------------
 
-def send_data(port, cfg, sent_count, sent_frames, pattern):
+def send_data(port, cfg, sent_count, sent_frames, sent_elapsed, pattern):
     # `port` may be shared with a receive_data thread (bidirectional -bxp).
     # This thread must NOT close the handle — closing would yank it out from
     # under its receive thread mid-drain. run_iteration closes centrally once
@@ -329,10 +329,11 @@ def send_data(port, cfg, sent_count, sent_frames, pattern):
     ttr_sec     = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
     nob         = cfg['nob']
     seq         = 0
+    start_time  = time.time()   # reset after warmup; defined here so finally is safe
 
     try:
         time.sleep(0.5)
-        start_time   = time.time()
+        start_time   = time.time()   # the real send window starts after warmup
         buffers_sent = 0
 
         while not stop_event.is_set():
@@ -367,6 +368,9 @@ def send_data(port, cfg, sent_count, sent_frames, pattern):
         logging.error(f"[TX {port_name}] Error: {e}")
         stop_event.set()
     finally:
+        # Wall-clock the port was actively writing (measured before flush, which
+        # is buffer-drain time, not active sending). Used for the real B/s figure.
+        sent_elapsed[port_name] = max(time.time() - start_time, 0.0)
         # ALWAYS drain the TX buffer. write() only queues bytes; without this the
         # tail of the transfer can be discarded when the port is later closed.
         try:
@@ -380,7 +384,7 @@ def send_data(port, cfg, sent_count, sent_frames, pattern):
                 pass
 
 
-def receive_data(port, cfg, received_count, verifiers, senders_done):
+def receive_data(port, cfg, received_count, verifiers, recv_elapsed, senders_done):
     """
     Drain the RX port until the senders are finished AND no new data has
     arrived for `quiet_grace` seconds. Do NOT stop merely because the clock
@@ -396,6 +400,9 @@ def receive_data(port, cfg, received_count, verifiers, senders_done):
     quiet_grace = max(rtc_sec, 2.0)          # how long to wait after the last byte
     # Absolute safety cap so a stuck link can't drain forever.
     hard_cap    = (ttr_sec + 60) if ttr_sec is not None else None
+
+    first_data_time = None        # set on first byte; defined here so finally is safe
+    last_data_time  = None
 
     try:
         time.sleep(0.5)
@@ -417,7 +424,10 @@ def receive_data(port, cfg, received_count, verifiers, senders_done):
                 received_count[port_name] += len(chunk)
                 if cfg['ver']:
                     verifiers[port_name].feed(chunk)   # fold + discard, flat memory
-                last_data_time = time.time()
+                now = time.time()
+                if first_data_time is None:
+                    first_data_time = now              # clock starts on the first byte
+                last_data_time = now
 
                 if cfg['verbose']:
                     elapsed = last_data_time - start_time
@@ -436,6 +446,13 @@ def receive_data(port, cfg, received_count, verifiers, senders_done):
     except Exception as e:
         logging.error(f"[RX {port_name}] Error: {e}")
         stop_event.set()
+    finally:
+        # Wall-clock from the first byte to the last byte actually received — the
+        # window data was flowing, which is the meaningful divisor for RX B/s.
+        if first_data_time is not None and last_data_time is not None:
+            recv_elapsed[port_name] = max(last_data_time - first_data_time, 0.0)
+        else:
+            recv_elapsed[port_name] = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +582,8 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
     sent_count     = {}
     received_count = {}
     sent_frames    = {}   # name -> number of frames written
+    sent_elapsed   = {}   # name -> seconds the TX loop actually ran
+    recv_elapsed   = {}   # name -> seconds from first to last byte received
     verifiers      = {}   # name -> FrameVerifier (streaming, flat memory)
     port_objs      = {}   # name -> Serial (opened once, may host TX and RX)
     senders_done   = threading.Event()
@@ -589,21 +608,23 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
 
         # One send thread per sending port.
         for name in send_ports:
-            sent_count[name]  = 0
-            sent_frames[name] = 0
+            sent_count[name]   = 0
+            sent_frames[name]  = 0
+            sent_elapsed[name] = 0.0
             t = threading.Thread(
                 target=send_data,
-                args=(port_objs[name], cfg, sent_count, sent_frames, pattern),
+                args=(port_objs[name], cfg, sent_count, sent_frames, sent_elapsed, pattern),
                 name=f"TX-{name}", daemon=True)
             threads.append(t); tx_threads.append(t)
 
         # One receive thread per receiving port.
         for name in recv_ports:
             received_count[name] = 0
+            recv_elapsed[name]   = 0.0
             verifiers[name]      = FrameVerifier()
             t = threading.Thread(
                 target=receive_data,
-                args=(port_objs[name], cfg, received_count, verifiers, senders_done),
+                args=(port_objs[name], cfg, received_count, verifiers, recv_elapsed, senders_done),
                 name=f"RX-{name}", daemon=True)
             threads.append(t); rx_threads.append(t)
 
@@ -643,15 +664,18 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         logging.info(f"ITERATION {iteration_num} RESULTS")
         logging.info("=" * 60)
         dropped = {}
-        ttr_s = max(cfg['ttr'] / 1000.0, 1) if cfg['ttr'] >= 0 else 1
         for sender, receiver in verify_pairs:
-            s = sent_count.get(sender, 0)
-            r = received_count.get(receiver, 0)
-            d = max(0, s - r)
+            s      = sent_count.get(sender, 0)
+            r      = received_count.get(receiver, 0)
+            d      = max(0, s - r)
+            s_el   = sent_elapsed.get(sender, 0.0)
+            r_el   = recv_elapsed.get(receiver, 0.0)
+            s_rate = s / s_el if s_el > 0 else 0
+            r_rate = r / r_el if r_el > 0 else 0
             dropped[(sender, receiver)] = d
             logging.info(f"  {sender} -> {receiver}")
-            logging.info(f"    Sent:     {s:>10} bytes  ({s/ttr_s:>8.0f} B/s)")
-            logging.info(f"    Received: {r:>10} bytes  ({r/ttr_s:>8.0f} B/s)")
+            logging.info(f"    Sent:     {s:>10} bytes  ({s_rate:>8.0f} B/s over {s_el:6.2f}s)")
+            logging.info(f"    Received: {r:>10} bytes  ({r_rate:>8.0f} B/s over {r_el:6.2f}s)")
             logging.info(f"    Dropped:  {d:>10} bytes")
         total_sent     = sum(sent_count.values())
         total_received = sum(received_count.values())
@@ -681,6 +705,8 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
             except Exception:
                 pass
         sent_frames.clear()
+        sent_elapsed.clear()
+        recv_elapsed.clear()
         verifiers.clear()
 
 # ---------------------------------------------------------------------------
