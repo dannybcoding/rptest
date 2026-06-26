@@ -269,42 +269,59 @@ class MainWindow(QMainWindow):
         grp = QGroupBox("Port Designation")
         gl = QGridLayout(grp)
 
-        gl.addWidget(QLabel("Bidirectional (-bxp):"), 0, 0)
-        self.bxp_edit = QLineEdit("0-3")
-        self.bxp_edit.setPlaceholderText("e.g. 0-3 or 0,1,2,3")
-        self.bxp_edit.textChanged.connect(self._refresh_command)
-        gl.addWidget(self.bxp_edit, 0, 1)
-
-        gl.addWidget(QLabel("TX-only (-txp):"), 1, 0)
-        self.txp_edit = QLineEdit()
-        self.txp_edit.setPlaceholderText("e.g. 0-1")
-        self.txp_edit.textChanged.connect(self._refresh_command)
-        gl.addWidget(self.txp_edit, 1, 1)
-
-        gl.addWidget(QLabel("RX-only (-rxp):"), 2, 0)
-        self.rxp_edit = QLineEdit()
-        self.rxp_edit.setPlaceholderText("e.g. 2-3")
-        self.rxp_edit.textChanged.connect(self._refresh_command)
-        gl.addWidget(self.rxp_edit, 2, 1)
-
-        gl.addWidget(QLabel("DUT device ID (-dut):"), 3, 0)
+        # Device families first — these define the two ends. Each port index N
+        # maps to /dev/tty<ID>NN, and a cable connects DUT N <-> AUX N.
+        gl.addWidget(QLabel("DUT device ID (-dut):"), 0, 0)
         self.dut_edit = QLineEdit("e8")
         self.dut_edit.setPlaceholderText("e.g. e8")
         self.dut_edit.textChanged.connect(self._refresh_command)
-        gl.addWidget(self.dut_edit, 3, 1)
+        gl.addWidget(self.dut_edit, 0, 1, 1, 2)
 
-        gl.addWidget(QLabel("AUX device ID (-aux):"), 4, 0)
+        gl.addWidget(QLabel("AUX device ID (-aux):"), 1, 0)
         self.aux_edit = QLineEdit("TS")
         self.aux_edit.setPlaceholderText("e.g. TS")
         self.aux_edit.textChanged.connect(self._refresh_command)
-        gl.addWidget(self.aux_edit, 4, 1)
+        gl.addWidget(self.aux_edit, 1, 1, 1, 2)
 
-        note = QLabel("Ports map to: /dev/tty<ID><nn>\n"
-                      "  e.g. DUT=e8, port 0 → /dev/ttye800\n"
-                      "  e.g. AUX=TS, port 0 → /dev/ttyTS00")
+        # Bidirectional: both families send AND receive, both directions.
+        gl.addWidget(QLabel("Bidirectional (-bxp):"), 2, 0)
+        self.bxp_edit = QLineEdit("0-3")
+        self.bxp_edit.setPlaceholderText("ports, e.g. 0-3 or 0,1,2,3")
+        self.bxp_edit.textChanged.connect(self._refresh_command)
+        gl.addWidget(self.bxp_edit, 2, 1, 1, 2)
+
+        # One-directional: choose which family transmits and which receives.
+        gl.addWidget(QLabel("TX side (-txp):"), 3, 0)
+        self.txp_dev = QComboBox()
+        self.txp_dev.currentIndexChanged.connect(self._refresh_command)
+        gl.addWidget(self.txp_dev, 3, 1)
+        self.txp_edit = QLineEdit()
+        self.txp_edit.setPlaceholderText("ports, e.g. 0-1")
+        self.txp_edit.textChanged.connect(self._refresh_command)
+        gl.addWidget(self.txp_edit, 3, 2)
+
+        gl.addWidget(QLabel("RX side (-rxp):"), 4, 0)
+        self.rxp_dev = QComboBox()
+        self.rxp_dev.currentIndexChanged.connect(self._refresh_command)
+        gl.addWidget(self.rxp_dev, 4, 1)
+        self.rxp_edit = QLineEdit()
+        self.rxp_edit.setPlaceholderText("ports, e.g. 0-1")
+        self.rxp_edit.textChanged.connect(self._refresh_command)
+        gl.addWidget(self.rxp_edit, 4, 2)
+
+        # Populate the TX/RX family dropdowns from the device IDs above, and keep
+        # them in sync if the IDs are edited. TX defaults to DUT, RX to AUX.
+        self.dut_edit.textChanged.connect(self._sync_port_devices)
+        self.aux_edit.textChanged.connect(self._sync_port_devices)
+        self._sync_port_devices(initial=True)
+
+        note = QLabel("Ports map to /dev/tty<ID><nn>  (DUT=e8 port 0 → /dev/ttye800).\n"
+                      "TX side transmits, RX side receives — pick opposite families\n"
+                      "at the same ports for a one-way test, e.g. TX=e8 / RX=TS\n"
+                      "(or swap them to reverse the direction).")
         note.setStyleSheet("color: #888898; font-size: 11px;")
-        gl.addWidget(note, 5, 0, 1, 2)
-        lay.addWidget(grp)  # ← this line was accidentally commented out on GitHub
+        gl.addWidget(note, 5, 0, 1, 3)
+        lay.addWidget(grp)
 
         # Iteration group
         grp2 = QGroupBox("Iterations")
@@ -666,9 +683,9 @@ class MainWindow(QMainWindow):
         if self.bxp_edit.text().strip():
             add('-bxp', self.bxp_edit.text().strip())
         if self.txp_edit.text().strip():
-            add('-txp', self.txp_edit.text().strip())
+            add('-txp', f"{self.txp_dev.currentText()}:{self.txp_edit.text().strip()}")
         if self.rxp_edit.text().strip():
-            add('-rxp', self.rxp_edit.text().strip())
+            add('-rxp', f"{self.rxp_dev.currentText()}:{self.rxp_edit.text().strip()}")
 
         add('-dut', self.dut_edit.text().strip() or 'e8')
         add('-aux', self.aux_edit.text().strip() or 'TS')
@@ -706,6 +723,24 @@ class MainWindow(QMainWindow):
             add('-ctx', self.ctx_edit.text().strip())
 
         return cmd
+
+    def _sync_port_devices(self, *args, initial=False):
+        """Keep the TX/RX family dropdowns populated from the DUT/AUX device IDs.
+        TX defaults to the DUT family, RX to the AUX family; an existing choice
+        is preserved across edits when it's still one of the two families."""
+        dut = self.dut_edit.text().strip() or 'e8'
+        aux = self.aux_edit.text().strip() or 'TS'
+        families = [dut, aux] if dut != aux else [dut]
+        for combo, default in ((self.txp_dev, dut), (self.rxp_dev, aux)):
+            previous = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(families)
+            idx = combo.findText('' if initial else previous)
+            combo.setCurrentIndex(idx if idx >= 0 else max(0, combo.findText(default)))
+            combo.blockSignals(False)
+        if not initial:
+            self._refresh_command()
 
     def _refresh_command(self):
         try:

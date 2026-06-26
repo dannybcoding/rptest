@@ -110,10 +110,19 @@ python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000 -rts 2 -cts 1
 python3 rptest_run.py -bxp 0-3 -bps 9600 -ttr 30000 -xon 1
 ```
 
-**Separate TX and RX port groups (TX on 0-1, RX on 2-3):**
+**One-directional TX → RX, choosing which device is which side:**
 ```bash
-python3 rptest_run.py -txp 0-1 -rxp 2-3 -bps 9600 -ttr 30000
+# e8 ports 0-1 transmit  ->  TS ports 0-1 receive
+python3 rptest_run.py -txp e8:0-1 -rxp TS:0-1 -bps 9600 -ttr 30000
+
+# reverse the direction: TS transmits  ->  e8 receives
+python3 rptest_run.py -txp TS:0-1 -rxp e8:0-1 -bps 9600 -ttr 30000
 ```
+The optional `ID:` prefix on `-txp`/`-rxp` selects the device family for that
+side. Omit it to fall back to the `-dut` family for TX and the `-aux` family
+for RX. The two sides pair up by position, so list matching ports in the same
+order, and use opposite families at the same ports (the two ends of one cable)
+so the data actually arrives.
 
 **Custom test pattern (single byte, repeating):**
 ```bash
@@ -140,11 +149,13 @@ python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 30000 -dex 1
 
 | Flag | Description |
 |---|---|
-| `-bxp PORTS` | Bidirectional ports — each port both sends and receives (loopback pair). Most common. |
-| `-txp PORTS` | Transmit-only ports |
-| `-rxp PORTS` | Receive-only ports |
+| `-bxp PORTS` | Bidirectional ports — each pair runs **both** directions: the DUT and AUX ends each transmit and receive simultaneously. Most common. |
+| `-txp [ID:]PORTS` | Transmit side of a one-directional test. Optional `ID:` chooses the device family that transmits (default: `-dut` family). |
+| `-rxp [ID:]PORTS` | Receive side of a one-directional test. Optional `ID:` chooses the device family that receives (default: `-aux` family). Pairs with `-txp` by position. |
 
-Port specs support ranges and comma lists: `0-3`, `0,2,4`, `0-1,3`.
+Port specs support ranges and comma lists: `0-3`, `0,2,4`, `0-1,3`. On
+`-txp`/`-rxp` an optional device prefix may lead the spec, e.g. `e8:0-3` or
+`TS:0,2`, to pick which family is that side of the link.
 
 ### Iteration control
 

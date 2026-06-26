@@ -4,20 +4,27 @@ Equivalent to the Windows rptest.exe utility for Digi RealPort devices.
 
 Usage examples (mirroring rptest syntax):
   # Basic bidirectional test on 4 port pairs, 60 sec, 115200 baud
-  python3 serialstress_run.py -bxp 0-3 -bps 115200 -ttr 60000
+  python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000
 
-  # TX-only on ports 0-1, RX-only on ports 2-3, 9600 baud
-  python3 serialstress_run.py -txp 0-1 -rxp 2-3 -bps 9600 -ttr 30000
+  # One-directional: e8 ports 0-1 transmit -> TS ports 0-1 receive
+  python3 rptest_run.py -txp e8:0-1 -rxp TS:0-1 -bps 9600 -ttr 30000
+
+  # Reverse direction: TS transmits -> e8 receives
+  python3 rptest_run.py -txp TS:0-1 -rxp e8:0-1 -bps 9600 -ttr 30000
 
   # Run 10 iterations, sleep 2s between, verify data, detailed log
-  python3 serialstress_run.py -bxp 0-3 -bps 115200 -ttr 60000 -rep 10 -slp 2000 -ver 1 -dex 1
+  python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000 -rep 10 -slp 2000 -ver 1 -dex 1
 
   # Run until failure, hardware flow control (RTS/CTS handshake)
-  python3 serialstress_run.py -bxp 0-3 -bps 115200 -ttr 60000 -rep -1 -rts 2 -cts 1
+  python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000 -rep -1 -rts 2 -cts 1
 
 Port numbering maps to:
-  DUT ports : /dev/tty<ID><Portnumber>  (e.g. port 0 = /dev/ttye800)
-  AUX ports : /dev/tty<ID><Portnumber>   (e.g. port 0 = /dev/ttyTS00)
+  Device node : /dev/tty<ID><Portnumber>   (e.g. e8 port 0 = /dev/ttye800,
+                                                  TS port 0 = /dev/ttyTS00)
+  -bxp uses the -dut and -aux families as the two ends and runs both directions.
+  -txp/-rxp may name the device family explicitly (ID:ports) to choose which
+  side transmits and which receives; without an id they default to -dut (tx)
+  and -aux (rx).
 """
 
 import serial
@@ -69,8 +76,13 @@ stop_event = threading.Event()
 #def port_index_to_names(index):
 #    return (f"{DUT_PREFIX}{index:02d}", f"{AUX_PREFIX}{index:02d}")
 
+def device_port_name(device_id, index):
+    """Build a full device node from a family id and a port index.
+       ('e8', 0) -> '/dev/ttye800' ;  ('TS', 12) -> '/dev/ttyTS12'."""
+    return f"/dev/tty{device_id}{index:02d}"
+
 def port_index_to_names(index, dut_id, aux_id):
-    return (f"/dev/tty{dut_id}{index:02d}", f"/dev/tty{aux_id}{index:02d}")
+    return (device_port_name(dut_id, index), device_port_name(aux_id, index))
 
 def parse_port_range(spec):
     """
@@ -88,6 +100,29 @@ def parse_port_range(spec):
         else:
             raise argparse.ArgumentTypeError(f"Invalid port spec: '{part}'")
     return sorted(indices)
+
+
+def parse_device_ports(spec, default_id):
+    """
+    Parse a TX/RX port spec that may carry a leading device-family id, so the
+    caller can choose which device transmits and which receives:
+
+        'e8:0-3'  -> ('e8', [0, 1, 2, 3])     # this family is the TX/RX side
+        'TS:0,2'  -> ('TS', [0, 2])
+        '0-3'     -> (default_id, [0, 1, 2, 3])  # no id => fall back to default
+        ''        -> (default_id, [])
+
+    default_id is the -dut family for -txp and the -aux family for -rxp, which
+    preserves the original behaviour when no id is given.
+    """
+    spec = (spec or '').strip()
+    if not spec:
+        return default_id, []
+    if ':' in spec:
+        dev, _, rng = spec.partition(':')
+        dev = dev.strip()
+        return (dev or default_id), parse_port_range(rng)
+    return default_id, parse_port_range(spec)
 
 # ---------------------------------------------------------------------------
 # Test-buffer pattern helpers
@@ -295,7 +330,7 @@ def open_port(name, cfg):
 # Single iteration
 # ---------------------------------------------------------------------------
 
-def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_num):
+def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, pattern, iteration_num):
     # Build sending ports, receiving ports, and directional (sender -> receiver)
     # verification pairs.
     #
@@ -316,10 +351,14 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
         _add(send_ports, dut); _add(recv_ports, aux); verify_pairs.append((dut, aux))
         _add(send_ports, aux); _add(recv_ports, dut); verify_pairs.append((aux, dut))
 
-    tx_port_names = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in tx_indices]
-    rx_port_names = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in rx_indices]
-    for (dut, _), (_, aux) in zip(tx_port_names, rx_port_names):
-        _add(send_ports, dut); _add(recv_ports, aux); verify_pairs.append((dut, aux))
+    # -txp/-rxp : one-directional. tx_dev transmits, rx_dev receives. The two
+    # are paired by position, so list matching indices in the same order. Use
+    # opposite families at the same index (the two ends of one cable) for data
+    # to actually arrive, e.g. -txp e8:0-3 -rxp TS:0-3  (or the reverse).
+    for ti, ri in zip(tx_indices, rx_indices):
+        tx_name = device_port_name(tx_dev, ti)
+        rx_name = device_port_name(rx_dev, ri)
+        _add(send_ports, tx_name); _add(recv_ports, rx_name); verify_pairs.append((tx_name, rx_name))
 
     all_ports = []
     for n in send_ports + recv_ports:
@@ -465,10 +504,13 @@ def parse_args():
                    help='AUX device ID, e.g. TS → /dev/ttyTS<nn>')
     p.add_argument('-bxp', default='', metavar='PORTS',
                    help='Bidirectional port indices, e.g. 0-3 or 0,1,2,3')
-    p.add_argument('-rxp', default='', metavar='PORTS',
-                   help='Receive-only port indices')
-    p.add_argument('-txp', default='', metavar='PORTS',
-                   help='Transmit-only port indices')
+    p.add_argument('-rxp', default='', metavar='[ID:]PORTS',
+                   help='Receive side. Optional device id chooses which family '
+                        'receives, e.g. TS:0-3 (default: -aux family)')
+    p.add_argument('-txp', default='', metavar='[ID:]PORTS',
+                   help='Transmit side. Optional device id chooses which family '
+                        'transmits, e.g. e8:0-3 (default: -dut family). Pairs '
+                        'with -rxp by position.')
     p.add_argument('-tbp', default=None, metavar='HEX',
                    help='Test buffer pattern hex, e.g. 0xAA')
     p.add_argument('-ctx', default=None, metavar='FILE',
@@ -532,7 +574,7 @@ def main():
 
     if not args.bxp and not args.rxp and not args.txp:
         print("ERROR: Specify at least one of -bxp, -rxp, -txp")
-        print("Example: python3 serialstress_run.py -bxp 0-3 -bps 115200 -ttr 60000")
+        print("Example: python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000")
         sys.exit(1)
 
     valid_baudrates = [50, 75, 110, 300, 600, 1200, 9600, 14400, 19200,
@@ -542,8 +584,18 @@ def main():
                  f"Valid: {', '.join(map(str, valid_baudrates))}")
 
     bx_indices = parse_port_range(args.bxp) if args.bxp else []
-    tx_indices = parse_port_range(args.txp) if args.txp else []
-    rx_indices = parse_port_range(args.rxp) if args.rxp else []
+    tx_dev, tx_indices = parse_device_ports(args.txp, args.dut)
+    rx_dev, rx_indices = parse_device_ports(args.rxp, args.aux)
+
+    # -txp and -rxp work as a pair: the TX side feeds the RX side, one direction.
+    if bool(tx_indices) ^ bool(rx_indices):
+        logging.warning("-txp and -rxp are used together (TX side -> RX side). "
+                        "Specifying one without the other transmits/listens with "
+                        "nothing on the far end and verifies nothing.")
+    if tx_indices and rx_indices and len(tx_indices) != len(rx_indices):
+        logging.warning(f"-txp has {len(tx_indices)} port(s) but -rxp has "
+                        f"{len(rx_indices)}; only the first "
+                        f"{min(len(tx_indices), len(rx_indices))} pair up.")
 
     cfg = dict(
         bps=args.bps, dbs=args.dbs, par=args.par, sbs=args.sbs,
@@ -565,7 +617,8 @@ def main():
     logging.info("=" * 60)
     logging.info("DIGI REALPORT SERIAL STRESS TEST")
     logging.info("=" * 60)
-    logging.info(f"  BX ports : {bx_indices}  TX ports: {tx_indices}  RX ports: {rx_indices}")
+    logging.info(f"  BX ports : {bx_indices}  (dut={cfg['dut']} <-> aux={cfg['aux']}, both directions)")
+    logging.info(f"  TX ports : {tx_indices} (device {tx_dev})  ->  RX ports : {rx_indices} (device {rx_dev})")
     logging.info(f"  Baud: {cfg['bps']}  DataBits: {cfg['dbs']}  Parity: {cfg['par']}  StopBits: {cfg['sbs']}")
     logging.info(f"  RTS: {cfg['rts']}  CTS: {cfg['cts']}  XonXoff: {cfg['xon']}")
     logging.info(f"  BufSize: {cfg['bss']}B  MaxBufs: {cfg['nob']}  TTR: {cfg['ttr']}ms")
@@ -583,7 +636,8 @@ def main():
             logging.info(f"\n>>> Iteration {iteration}"
                          + (f" of {args.rep}" if args.rep > 0 else " (continuous)"))
 
-            passed = run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration)
+            passed = run_iteration(tx_dev, tx_indices, rx_dev, rx_indices,
+                                   bx_indices, cfg, pattern, iteration)
 
             if passed:
                 total_pass += 1
