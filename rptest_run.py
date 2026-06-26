@@ -1,5 +1,5 @@
 """
-serialstress_run.py  -  Linux RealPort Serial Stress Tester
+rptest_run.py  -  Linux RealPort Serial Stress Tester
 Equivalent to the Windows rptest.exe utility for Digi RealPort devices.
 
 Usage examples (mirroring rptest syntax):
@@ -114,8 +114,12 @@ def build_pattern(tbp_hex=None, ctx_file=None, buf_size=1152):
 # I/O worker threads
 # ---------------------------------------------------------------------------
 
-def send_data(dut_port, cfg, sent_count, sent_data, pattern):
-    port_name   = dut_port.port
+def send_data(port, cfg, sent_count, sent_data, pattern):
+    # `port` may be shared with a receive_data thread (bidirectional -bxp).
+    # This thread must NOT close the handle — closing would yank it out from
+    # under its receive thread mid-drain. run_iteration closes centrally once
+    # every thread has stopped.
+    port_name   = port.port
     buf_size    = cfg['bss']
     btw_sec     = cfg['btw'] / 1000.0
     ttr_sec     = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
@@ -134,7 +138,7 @@ def send_data(dut_port, cfg, sent_count, sent_data, pattern):
 
             chunk = pattern[:buf_size]
             try:
-                dut_port.write(chunk)
+                port.write(chunk)
             except serial.SerialTimeoutException:
                 logging.warning(f"[{port_name}] Write timeout")
                 if cfg['res']:
@@ -158,32 +162,30 @@ def send_data(dut_port, cfg, sent_count, sent_data, pattern):
         logging.error(f"[TX {port_name}] Error: {e}")
         stop_event.set()
     finally:
-        # ALWAYS drain the TX buffer before closing. write() only queues bytes;
-        # closing without flushing can discard whatever is still in the OS /
-        # RealPort write buffer, silently dropping the tail of the transfer.
+        # ALWAYS drain the TX buffer. write() only queues bytes; without this the
+        # tail of the transfer can be discarded when the port is later closed.
         try:
-            dut_port.flush()          # blocks until all written data is transmitted
+            port.flush()              # blocks until all written data is transmitted
         except Exception:
             pass
         if cfg['flb']:
             try:
-                dut_port.reset_output_buffer()
+                port.reset_output_buffer()
             except Exception:
                 pass
-        try:
-            dut_port.close()
-        except Exception:
-            pass
 
 
-def receive_data(aux_port, cfg, received_count, received_data, senders_done):
+def receive_data(port, cfg, received_count, received_data, senders_done):
     """
     Drain the RX port until the senders are finished AND no new data has
     arrived for `quiet_grace` seconds. Do NOT stop merely because the clock
     passed `ttr`: on network-attached serial (RealPort) the tail of a transfer
     arrives in bursts with small gaps, so a clock-based cutoff truncates data.
+
+    `port` may be shared with a send_data thread (bidirectional -bxp); this
+    thread must NOT close it — run_iteration closes centrally after all joins.
     """
-    port_name   = aux_port.port
+    port_name   = port.port
     ttr_sec     = cfg['ttr'] / 1000.0 if cfg['ttr'] >= 0 else None
     rtc_sec     = cfg['rtc'] / 1000.0
     quiet_grace = max(rtc_sec, 2.0)          # how long to wait after the last byte
@@ -202,9 +204,9 @@ def receive_data(aux_port, cfg, received_count, received_data, senders_done):
                                 f"stopping drain (possible stuck link)")
                 break
 
-            aux_port.timeout = min(rtc_sec, 1.0)
-            n = aux_port.in_waiting
-            chunk = aux_port.read(n if n > 0 else 1)
+            port.timeout = min(rtc_sec, 1.0)
+            n = port.in_waiting
+            chunk = port.read(n if n > 0 else 1)
 
             if chunk:
                 received_count[port_name] += len(chunk)
@@ -229,34 +231,29 @@ def receive_data(aux_port, cfg, received_count, received_data, senders_done):
     except Exception as e:
         logging.error(f"[RX {port_name}] Error: {e}")
         stop_event.set()
-    finally:
-        try:
-            aux_port.close()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
 # Data verification
 # ---------------------------------------------------------------------------
 
-def verify_data(sent_data, received_data, port_mapping):
+def verify_data(sent_data, received_data, verify_pairs):
     all_ok = True
     logging.info("=" * 60)
     logging.info("DATA VERIFICATION")
     logging.info("=" * 60)
-    for dut_port, aux_port in port_mapping.items():
-        sent     = bytes(sent_data.get(dut_port, []))
-        received = bytes(received_data.get(aux_port, []))
+    for sender, receiver in verify_pairs:
+        sent     = bytes(sent_data.get(sender, b''))
+        received = bytes(received_data.get(receiver, b''))
         if sent == received:
-            logging.info(f"  PASS  {dut_port} -> {aux_port}  ({len(sent)} bytes match)")
+            logging.info(f"  PASS  {sender} -> {receiver}  ({len(sent)} bytes match)")
         else:
             all_ok = False
             mismatch_idx = next(
                 (i for i, (s, r) in enumerate(zip(sent, received)) if s != r),
                 min(len(sent), len(received))
             )
-            logging.info(f"  FAIL  {dut_port} -> {aux_port}  "
+            logging.info(f"  FAIL  {sender} -> {receiver}  "
                          f"sent={len(sent)}B received={len(received)}B "
                          f"first mismatch @ byte {mismatch_idx}")
     logging.info("=" * 60)
@@ -299,15 +296,34 @@ def open_port(name, cfg):
 # ---------------------------------------------------------------------------
 
 def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_num):
-    port_mapping   = {}
-    bx_port_names  = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in bx_indices]
-    tx_port_names  = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in tx_indices]
-    rx_port_names  = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in rx_indices]
+    # Build sending ports, receiving ports, and directional (sender -> receiver)
+    # verification pairs.
+    #
+    #   -bxp : TRUE bidirectional. For each index data flows BOTH ways
+    #            DUT -> AUX  and  AUX -> DUT
+    #          so both ports send AND receive.
+    #   -txp/-rxp : one-directional DUT(tx) -> AUX(rx), as before.
+    send_ports   = []   # ordered, unique
+    recv_ports   = []   # ordered, unique
+    verify_pairs = []   # list of (sender_name, receiver_name)
 
-    for dut, aux in bx_port_names:
-        port_mapping[dut] = aux
+    def _add(seq, name):
+        if name not in seq:
+            seq.append(name)
+
+    for i in bx_indices:
+        dut, aux = port_index_to_names(i, cfg['dut'], cfg['aux'])
+        _add(send_ports, dut); _add(recv_ports, aux); verify_pairs.append((dut, aux))
+        _add(send_ports, aux); _add(recv_ports, dut); verify_pairs.append((aux, dut))
+
+    tx_port_names = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in tx_indices]
+    rx_port_names = [port_index_to_names(i, cfg['dut'], cfg['aux']) for i in rx_indices]
     for (dut, _), (_, aux) in zip(tx_port_names, rx_port_names):
-        port_mapping[dut] = aux
+        _add(send_ports, dut); _add(recv_ports, aux); verify_pairs.append((dut, aux))
+
+    all_ports = []
+    for n in send_ports + recv_ports:
+        _add(all_ports, n)
 
     threads        = []
     tx_threads     = []
@@ -316,47 +332,46 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
     received_count = {}
     sent_data      = {}
     received_data  = {}
-    open_ports     = []
+    port_objs      = {}   # name -> Serial (opened once, may host TX and RX)
     senders_done   = threading.Event()
 
     logging.info(f"--- Iteration {iteration_num} start ---")
 
     try:
-        for dut_name in list(port_mapping.keys()):
+        # Open every participating port exactly once.
+        for name in all_ports:
             try:
-                port = open_port(dut_name, cfg)
-                open_ports.append(port)
-                sent_count[dut_name] = 0
-                sent_data[dut_name]  = []
-                t = threading.Thread(
-                    target=send_data,
-                    args=(port, cfg, sent_count, sent_data, pattern),
-                    name=f"TX-{dut_name}", daemon=True)
-                threads.append(t)
-                tx_threads.append(t)
-                logging.debug(f"Opened TX port: {dut_name}")
+                port_objs[name] = open_port(name, cfg)
+                logging.debug(f"Opened port: {name}")
             except Exception as e:
-                logging.error(f"Cannot open TX port {dut_name}: {e}")
+                logging.error(f"Cannot open port {name}: {e}")
                 stop_event.set()
+                for p in port_objs.values():
+                    try:
+                        p.close()
+                    except Exception:
+                        pass
                 return False
 
-        for aux_name in list(port_mapping.values()):
-            try:
-                port = open_port(aux_name, cfg)
-                open_ports.append(port)
-                received_count[aux_name] = 0
-                received_data[aux_name]  = []
-                t = threading.Thread(
-                    target=receive_data,
-                    args=(port, cfg, received_count, received_data, senders_done),
-                    name=f"RX-{aux_name}", daemon=True)
-                threads.append(t)
-                rx_threads.append(t)
-                logging.debug(f"Opened RX port: {aux_name}")
-            except Exception as e:
-                logging.error(f"Cannot open RX port {aux_name}: {e}")
-                stop_event.set()
-                return False
+        # One send thread per sending port.
+        for name in send_ports:
+            sent_count[name] = 0
+            sent_data[name]  = bytearray()
+            t = threading.Thread(
+                target=send_data,
+                args=(port_objs[name], cfg, sent_count, sent_data, pattern),
+                name=f"TX-{name}", daemon=True)
+            threads.append(t); tx_threads.append(t)
+
+        # One receive thread per receiving port.
+        for name in recv_ports:
+            received_count[name] = 0
+            received_data[name]  = bytearray()
+            t = threading.Thread(
+                target=receive_data,
+                args=(port_objs[name], cfg, received_count, received_data, senders_done),
+                name=f"RX-{name}", daemon=True)
+            threads.append(t); rx_threads.append(t)
 
         for t in threads:
             t.start()
@@ -389,18 +404,18 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
         for t in threads:
             t.join(timeout=10)
 
-        # Results
+        # Results — one block per direction.
         logging.info("=" * 60)
         logging.info(f"ITERATION {iteration_num} RESULTS")
         logging.info("=" * 60)
         dropped = {}
         ttr_s = max(cfg['ttr'] / 1000.0, 1) if cfg['ttr'] >= 0 else 1
-        for dut_name, aux_name in port_mapping.items():
-            s = sent_count.get(dut_name, 0)
-            r = received_count.get(aux_name, 0)
+        for sender, receiver in verify_pairs:
+            s = sent_count.get(sender, 0)
+            r = received_count.get(receiver, 0)
             d = max(0, s - r)
-            dropped[aux_name] = d
-            logging.info(f"  {dut_name} -> {aux_name}")
+            dropped[(sender, receiver)] = d
+            logging.info(f"  {sender} -> {receiver}")
             logging.info(f"    Sent:     {s:>10} bytes  ({s/ttr_s:>8.0f} B/s)")
             logging.info(f"    Received: {r:>10} bytes  ({r/ttr_s:>8.0f} B/s)")
             logging.info(f"    Dropped:  {d:>10} bytes")
@@ -412,7 +427,7 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
 
         passed = True
         if cfg['ver']:
-            passed = verify_data(sent_data, received_data, port_mapping)
+            passed = verify_data(sent_data, received_data, verify_pairs)
         if any(v > 0 for v in dropped.values()):
             logging.error("Dropped bytes detected.")
             passed = False
@@ -423,7 +438,9 @@ def run_iteration(tx_indices, rx_indices, bx_indices, cfg, pattern, iteration_nu
         logging.error(f"Error in run_iteration: {e}")
         return False
     finally:
-        for p in open_ports:
+        # Central close — only after every thread has stopped, so a port's
+        # receive thread is never reading a handle its send thread just closed.
+        for p in port_objs.values():
             try:
                 if p.is_open:
                     p.close()
