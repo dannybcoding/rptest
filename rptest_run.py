@@ -539,6 +539,25 @@ def open_port(name, cfg):
     return port
 
 # ---------------------------------------------------------------------------
+# Modem line status
+# ---------------------------------------------------------------------------
+# Snapshot of the input modem control lines (CTS/DSR/CD/RI) per port, for a bit
+# of protocol context alongside the byte counts. Read via pyserial's line
+# properties; each guarded so an unsupported line just reports as unknown.
+# (Kernel framing/parity/overrun counters aren't read: the RealPort driver
+#  doesn't implement the TIOCGICOUNT ioctl, so there's nothing to report.)
+
+def read_modem_lines(port):
+    """Current state of the input modem control lines (True/False/None)."""
+    out = {}
+    for name in ('cts', 'dsr', 'cd', 'ri'):
+        try:
+            out[name] = bool(getattr(port, name))
+        except Exception:
+            out[name] = None
+    return out
+
+# ---------------------------------------------------------------------------
 # Single iteration
 # ---------------------------------------------------------------------------
 
@@ -686,6 +705,16 @@ def run_iteration(tx_dev, tx_indices, rx_dev, rx_indices, bx_indices, cfg, patte
         total_received = sum(received_count.values())
         logging.info(f"  TOTALS  sent={total_sent}  received={total_received}  "
                      f"dropped={sum(dropped.values())}  extra={sum(extra.values())}")
+        logging.info("=" * 60)
+
+        # Modem line snapshot — informational context, no effect on pass/fail.
+        logging.info("MODEM STATUS")
+        for name in all_ports:
+            modem = read_modem_lines(port_objs[name])
+            modem_str = ' '.join(
+                f"{k.upper()}={'1' if v else '0'}" if v is not None else f"{k.upper()}=?"
+                for k, v in modem.items())
+            logging.info(f"  {name}: {modem_str}")
         logging.info("=" * 60)
 
         passed = True

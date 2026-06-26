@@ -272,20 +272,20 @@ class MainWindow(QMainWindow):
         # Device families first — these define the two ends. Each port index N
         # maps to /dev/tty<ID>NN, and a cable connects DUT N <-> AUX N.
         gl.addWidget(QLabel("DUT device ID (-dut):"), 0, 0)
-        self.dut_edit = QLineEdit("e8")
+        self.dut_edit = QLineEdit("E8")
         self.dut_edit.setPlaceholderText("e.g. e8")
         self.dut_edit.textChanged.connect(self._refresh_command)
         gl.addWidget(self.dut_edit, 0, 1, 1, 2)
 
         gl.addWidget(QLabel("AUX device ID (-aux):"), 1, 0)
-        self.aux_edit = QLineEdit("TS")
+        self.aux_edit = QLineEdit("T8")
         self.aux_edit.setPlaceholderText("e.g. TS")
         self.aux_edit.textChanged.connect(self._refresh_command)
         gl.addWidget(self.aux_edit, 1, 1, 1, 2)
 
         # Bidirectional: both families send AND receive, both directions.
         gl.addWidget(QLabel("Bidirectional (-bxp):"), 2, 0)
-        self.bxp_edit = QLineEdit("0-3")
+        self.bxp_edit = QLineEdit("0-7")
         self.bxp_edit.setPlaceholderText("ports, e.g. 0-3 or 0,1,2,3")
         self.bxp_edit.textChanged.connect(self._refresh_command)
         gl.addWidget(self.bxp_edit, 2, 1, 1, 2)
@@ -435,7 +435,7 @@ class MainWindow(QMainWindow):
         gl.addWidget(QLabel("Time to run (-ttr, ms, -1=forever):"), 0, 0)
         self.ttr_spin = QSpinBox()
         self.ttr_spin.setRange(-1, 9999999)
-        self.ttr_spin.setValue(60)
+        self.ttr_spin.setValue(6000)
         self.ttr_spin.setSpecialValueText("Forever (-1)")
         self.ttr_spin.valueChanged.connect(self._refresh_command)
         gl.addWidget(self.ttr_spin, 0, 1)
@@ -687,8 +687,8 @@ class MainWindow(QMainWindow):
         if self.rxp_edit.text().strip():
             add('-rxp', f"{self.rxp_dev.currentText()}:{self.rxp_edit.text().strip()}")
 
-        add('-dut', self.dut_edit.text().strip() or 'e8')
-        add('-aux', self.aux_edit.text().strip() or 'TS')
+        add('-dut', self.dut_edit.text().strip() or 'E8')
+        add('-aux', self.aux_edit.text().strip() or 'T8')
 
         add('-bps', int(self.bps_combo.currentText()))
         add('-dbs', int(self.dbs_combo.currentText()))
