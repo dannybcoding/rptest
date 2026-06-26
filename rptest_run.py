@@ -37,6 +37,7 @@ import os
 import re
 import zlib
 import json
+import signal
 from logging.handlers import RotatingFileHandler
 
 # ---------------------------------------------------------------------------
@@ -84,9 +85,26 @@ console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
 logging.getLogger('').addHandler(console)
 
 # ---------------------------------------------------------------------------
-# Global stop event
+# Global stop / terminate events
 # ---------------------------------------------------------------------------
-stop_event = threading.Event()
+# stop_event      : per-iteration "threads stop now" signal (set/cleared each run)
+# terminate_event : "end the whole run" signal, set by SIGTERM/Ctrl-C so the
+#                   process winds down gracefully and still prints its summary,
+#                   instead of being hard-killed mid-flight.
+stop_event      = threading.Event()
+terminate_event = threading.Event()
+
+def _handle_terminate(signum, frame):
+    """SIGTERM handler: ask for a graceful stop rather than dying immediately.
+
+    The GUI's Stop button sends SIGTERM (process.terminate()). Without this,
+    the default handler kills the process outright, so the iteration's threads
+    are abandoned and no results/verification/summary are ever produced. Here we
+    just set the events; the run loop and worker threads observe them, stop, and
+    the normal reporting path runs before exit."""
+    logging.warning("Received SIGTERM — stopping gracefully.")
+    terminate_event.set()
+    stop_event.set()
 
 # ---------------------------------------------------------------------------
 # Port-name helpers
@@ -880,6 +898,9 @@ def main():
     global JSON_OUT
     JSON_OUT = bool(args.json)
 
+    # Graceful shutdown on SIGTERM (the GUI's Stop button) — see _handle_terminate.
+    signal.signal(signal.SIGTERM, _handle_terminate)
+
     if not args.bxp and not args.rxp and not args.txp:
         print("ERROR: Specify at least one of -bxp, -rxp, -txp")
         print("Example: python3 rptest_run.py -bxp 0-3 -bps 115200 -ttr 60000")
@@ -956,6 +977,8 @@ def main():
 
     try:
         while True:
+            if terminate_event.is_set():
+                break
             iteration += 1
             stop_event.clear()
             logging.info(f"\n>>> Iteration {iteration}"
@@ -974,6 +997,15 @@ def main():
                 logging.error(f"Iteration {iteration}: FAIL  ({total_pass} pass / {total_fail} fail)")
                 emit_event({"type": "iteration_result", "iteration": iteration,
                             "result": "FAIL", "pass": total_pass, "fail": total_fail})
+
+            # A stop request (SIGTERM/Ctrl-C) ends the run cleanly here — after the
+            # iteration's results/verification have been reported — rather than
+            # being treated as a spontaneous failure.
+            if terminate_event.is_set():
+                logging.warning(f"Run stopped by request after iteration {iteration}.")
+                break
+
+            if not passed:
                 logging.error("Stopping due to failure.")
                 break
 
@@ -981,13 +1013,15 @@ def main():
                 logging.info(f"Completed {args.rep} iteration(s).")
                 break
 
-            if args.slp > 0:
-                time.sleep(args.slp / 1000.0)
+            # Interruptible sleep between reps so a stop is acted on promptly.
+            if args.slp > 0 and terminate_event.wait(args.slp / 1000.0):
+                break
 
             stop_event.clear()
 
     except KeyboardInterrupt:
         logging.info("\nKeyboardInterrupt - stopping.")
+        terminate_event.set()
         stop_event.set()
 
     logging.info("=" * 60)

@@ -145,6 +145,9 @@ class TestRunner(QThread):
             text=True,
             bufsize=1
         )
+        # Read until the backend closes stdout. On Stop we send SIGTERM and keep
+        # reading so the backend's graceful drain/summary still streams in, rather
+        # than chopping the read loop off mid-shutdown.
         for line in self.process.stdout:
             line = line.rstrip('\n')
             ev = self._as_event(line)
@@ -152,16 +155,30 @@ class TestRunner(QThread):
                 self.event.emit(ev)        # structured stats — never regex-scraped
             else:
                 self.log_line.emit(line)   # human log text -> log pane
-            if self._stop:
-                self.process.terminate()
-                break
         self.process.wait()
         self.finished.emit(self.process.returncode)
 
     def stop(self):
+        """Ask the backend to stop gracefully (SIGTERM -> it drains and reports),
+        with a hard-kill fallback if it doesn't exit in time."""
         self._stop = True
-        if self.process:
-            self.process.terminate()
+        p = self.process
+        if not p:
+            return
+        try:
+            p.terminate()                  # SIGTERM: backend stops cleanly & reports
+        except Exception:
+            return
+
+        def _watchdog():
+            try:
+                p.wait(timeout=20)         # bounded by the backend's join timeouts
+            except Exception:
+                try:
+                    p.kill()               # last resort if it hangs
+                except Exception:
+                    pass
+        threading.Thread(target=_watchdog, daemon=True).start()
 
     @staticmethod
     def _as_event(line):
@@ -851,7 +868,12 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.run_start = None
 
-        if exit_code == 0:
+        stopped = bool(self.runner and getattr(self.runner, '_stop', False))
+        if stopped:
+            self.status_bar.showMessage("Test stopped by user", 10000)
+            self._append_log("=" * 60)
+            self._append_log("TEST STOPPED BY USER")
+        elif exit_code == 0:
             self.status_bar.showMessage("Test completed: PASS", 10000)
             self._append_log("=" * 60)
             self._append_log("TEST COMPLETED: PASS")
