@@ -22,6 +22,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QProcess
 from PyQt5.QtGui import QFont, QColor, QPalette, QTextCursor, QIcon
 
+# Path where the most recent settings are auto-saved on exit and restored on
+# launch (kept in the home dir so it doesn't clutter or get committed to the repo).
+LAST_PROFILE = os.path.expanduser("~/.rptest_gui_last.json")
+
 # -----------------------------------------------------------------------
 # Dark palette
 # -----------------------------------------------------------------------
@@ -266,6 +270,9 @@ class MainWindow(QMainWindow):
         self.timer.start(1000)
 
         self._refresh_command()
+
+        # Restore the most recent settings so config isn't re-entered each launch.
+        self._read_profile(LAST_PROFILE, announce=False)
 
     # -------------------------------------------------------------------
     # Tab builders
@@ -632,6 +639,19 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(4)
 
+        # Profiles: save the current config to a file / load it back, so a setup
+        # doesn't have to be re-entered every launch.
+        prof_row = QHBoxLayout()
+        prof_row.addWidget(QLabel("Profile:"))
+        save_prof_btn = QPushButton("Save Profile…")
+        save_prof_btn.clicked.connect(self._save_profile)
+        load_prof_btn = QPushButton("Load Profile…")
+        load_prof_btn.clicked.connect(self._load_profile)
+        prof_row.addWidget(save_prof_btn)
+        prof_row.addWidget(load_prof_btn)
+        prof_row.addStretch()
+        lay.addLayout(prof_row)
+
         # Command preview
         cmd_row = QHBoxLayout()
         cmd_row.addWidget(QLabel("Command:"))
@@ -679,6 +699,107 @@ class MainWindow(QMainWindow):
         if path:
             with open(path, 'w') as f:
                 f.write(self.log_edit.toPlainText())
+
+    # -------------------------------------------------------------------
+    # Test profiles (save / load all config widgets)
+    # -------------------------------------------------------------------
+    # Every editable config widget is captured generically by attribute name and
+    # type, so the profile stays in sync automatically as widgets are added — no
+    # hand-maintained list. The read-only command preview is skipped; the log is
+    # a QTextEdit and isn't a config type, so it's excluded too.
+    def _collect_profile(self):
+        prof = {}
+        for name, w in self.__dict__.items():
+            if isinstance(w, QLineEdit) and not w.isReadOnly():
+                prof[name] = {"t": "edit",  "v": w.text()}
+            elif isinstance(w, QComboBox):
+                prof[name] = {"t": "combo", "v": w.currentText()}
+            elif isinstance(w, QSpinBox):
+                prof[name] = {"t": "spin",  "v": w.value()}
+            elif isinstance(w, QCheckBox):
+                prof[name] = {"t": "check", "v": w.isChecked()}
+        return prof
+
+    def _set_widget(self, name, spec):
+        if not spec:
+            return
+        w = getattr(self, name, None)
+        if w is None:
+            return
+        t, v = spec.get("t"), spec.get("v")
+        try:
+            if t == "edit" and isinstance(w, QLineEdit) and not w.isReadOnly():
+                w.setText(str(v))
+            elif t == "combo" and isinstance(w, QComboBox):
+                i = w.findText(str(v))
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            elif t == "spin" and isinstance(w, QSpinBox):
+                w.setValue(int(v))
+            elif t == "check" and isinstance(w, QCheckBox):
+                w.setChecked(bool(v))
+        except Exception:
+            pass    # unknown/renamed widget or bad value -> skip, keep going
+
+    def _apply_profile(self, prof):
+        # DUT/AUX first: setting them repopulates the TX/RX family dropdowns
+        # (via _sync_port_devices) before those combos are restored.
+        for name in ("dut_edit", "aux_edit"):
+            self._set_widget(name, prof.get(name))
+        for name, spec in prof.items():
+            if isinstance(spec, dict) and spec.get("t") == "edit" \
+                    and name not in ("dut_edit", "aux_edit"):
+                self._set_widget(name, spec)
+        for name, spec in prof.items():
+            if isinstance(spec, dict) and spec.get("t") in ("combo", "spin", "check"):
+                self._set_widget(name, spec)
+        self._refresh_command()
+
+    def _write_profile(self, path):
+        with open(path, "w") as f:
+            json.dump(self._collect_profile(), f, indent=2)
+
+    def _read_profile(self, path, announce=True):
+        try:
+            with open(path) as f:
+                prof = json.load(f)
+        except FileNotFoundError:
+            return False
+        except (ValueError, OSError) as e:
+            if announce:
+                self.status_bar.showMessage(f"Could not load profile: {e}", 8000)
+            return False
+        self._apply_profile(prof)
+        if announce:
+            self.status_bar.showMessage(f"Loaded profile: {path}", 8000)
+        return True
+
+    def _save_profile(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save profile", "profile.json",
+                                              "Profiles (*.json);;All (*)")
+        if not path:
+            return
+        if not path.endswith(".json"):
+            path += ".json"
+        try:
+            self._write_profile(path)
+            self.status_bar.showMessage(f"Saved profile: {path}", 8000)
+        except OSError as e:
+            self.status_bar.showMessage(f"Could not save profile: {e}", 8000)
+
+    def _load_profile(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load profile", "",
+                                              "Profiles (*.json);;All (*)")
+        if path:
+            self._read_profile(path, announce=True)
+
+    def closeEvent(self, event):
+        # Remember the current config for next launch (best-effort).
+        try:
+            self._write_profile(LAST_PROFILE)
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _cts_value(self):
         idx = self.cts_combo.currentIndex()

@@ -288,8 +288,27 @@ The bottom of the window shows the exact command that will be run (including
 - **Stop** — sends SIGTERM; the backend drains and prints its summary before
   exiting (a hard kill is only used as a fallback if it hangs). Reported as
   "stopped by user," not a failure.
+- **Save Profile…** / **Load Profile…** — save the current configuration to a
+  JSON file and load it back (see Test Profiles below)
 - **Clear** — clears the log display (does not affect the log file)
 - **Save log…** — saves the current log display to a file
+
+### Test Profiles
+
+The GUI remembers configuration so you don't have to re-enter it each launch:
+
+- **Auto-restore:** on exit, the current settings are saved to
+  `~/.rptest_gui_last.json` and restored automatically the next time the GUI
+  opens.
+- **Named profiles:** use **Save Profile…** to write all current settings to a
+  `.json` file of your choosing, and **Load Profile…** to apply them later —
+  handy for keeping per-device or per-scenario setups (e.g. a quick smoke test
+  vs. a long overnight soak).
+
+A profile captures every field on all four tabs (ports, serial settings, timing,
+flow control, and the on-error options). A malformed or outdated profile file is
+ignored rather than causing an error, and unknown fields are skipped, so profiles
+remain forward-compatible as new options are added.
 
 ---
 
